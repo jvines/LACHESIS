@@ -1,0 +1,14 @@
+name = "Lachesis"
+uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+version = "0.1.0"
+
+[deps]
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
