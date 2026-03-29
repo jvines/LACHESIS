@@ -1,4 +1,4 @@
-"""3D grid interpolation over isochrone grids."""
+"""Grid interpolation over isochrone grids (3D or 4D with rotation)."""
 
 
 import numpy as np
@@ -15,46 +15,47 @@ def make_interpolator(grid):
 
 
 class GridInterpolator:
-    """Interpolates an IsochroneGrid in (EEP, log_age, [Fe/H]) space.
+    """Interpolates an IsochroneGrid in (EEP, log_age, [Fe/H]) space,
+    or (EEP, log_age, [Fe/H], Vini) for grids with a rotation axis.
 
     Builds one scipy RegularGridInterpolator per output column.
-    Out-of-bounds and NaN regions return NaN.
-    Supports both scalar and vectorized calls.
     """
 
     def __init__(self, grid):
         self._grid = grid
         self._columns = grid.columns
+        self._has_vini = hasattr(grid, "vini_values") and grid.vini_values is not None
 
-        # Grid axes (must be 1D, strictly ascending)
         feh = grid.feh_values
         ages = grid.age_values
         eeps = grid.eep_values.astype(float)
 
-        # Build one interpolator per column
-        # Data shape: (n_feh, n_age, n_eep, n_cols)
         self._interpolators = {}
-        for ci, col in enumerate(self._columns):
-            # Extract 3D slice: (n_feh, n_age, n_eep)
-            data_3d = grid._data[:, :, :, ci]
-            self._interpolators[col] = RegularGridInterpolator(
-                (feh, ages, eeps),
-                data_3d,
-                method="linear",
-                bounds_error=False,
-                fill_value=np.nan,
-            )
 
-    def __call__(
-        self,
-        eep: float | np.ndarray,
-        log_age: float | np.ndarray,
-        feh: float | np.ndarray,
-    ) -> dict[str, float | np.ndarray]:
-        """Interpolate at (EEP, log_age, [Fe/H]).
+        if self._has_vini:
+            vini = grid.vini_values
+            for ci, col in enumerate(self._columns):
+                data_4d = grid._data[:, :, :, :, ci]
+                self._interpolators[col] = RegularGridInterpolator(
+                    (feh, vini, ages, eeps),
+                    data_4d,
+                    method="linear",
+                    bounds_error=False,
+                    fill_value=np.nan,
+                )
+        else:
+            for ci, col in enumerate(self._columns):
+                data_3d = grid._data[:, :, :, ci]
+                self._interpolators[col] = RegularGridInterpolator(
+                    (feh, ages, eeps),
+                    data_3d,
+                    method="linear",
+                    bounds_error=False,
+                    fill_value=np.nan,
+                )
 
-        Accepts scalars or arrays. Returns dict of column → value(s).
-        """
+    def __call__(self, eep, log_age, feh, vini=None):
+        """Interpolate at (EEP, log_age, [Fe/H], [Vini])."""
         eep = np.asarray(eep, dtype=float)
         log_age = np.asarray(log_age, dtype=float)
         feh = np.asarray(feh, dtype=float)
@@ -65,9 +66,15 @@ class GridInterpolator:
             log_age = log_age.reshape(1)
             feh = feh.reshape(1)
 
-        # RegularGridInterpolator expects (n_points, n_dims)
-        # Axes order in the interpolator: (feh, age, eep)
-        points = np.column_stack([feh, log_age, eep])
+        if self._has_vini:
+            if vini is None:
+                raise ValueError("Grid has rotation axis — vini is required")
+            vini = np.asarray(vini, dtype=float)
+            if scalar:
+                vini = vini.reshape(1)
+            points = np.column_stack([feh, vini, log_age, eep])
+        else:
+            points = np.column_stack([feh, log_age, eep])
 
         result = {}
         for col, interp in self._interpolators.items():

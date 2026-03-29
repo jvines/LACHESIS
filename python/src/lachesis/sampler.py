@@ -31,12 +31,14 @@ class IsochroneFitter:
         bc_table=None,
         distance_range: tuple[float, float] | None = None,
         av_range: tuple[float, float] | None = None,
+        vini_range: tuple[float, float] | None = None,
         binary: bool = False,
         imf: str = "chabrier",
     ):
         self.interp = interp
         self.bc_table = bc_table
         self._binary = binary
+        self._has_vini = vini_range is not None
         self.prior = IsochonePrior(
             eep_range=eep_range,
             age_range=age_range,
@@ -44,6 +46,7 @@ class IsochroneFitter:
             feh_prior=feh_prior,
             distance_range=distance_range,
             av_range=av_range,
+            vini_range=vini_range,
             binary=binary,
             imf=imf,
         )
@@ -75,9 +78,10 @@ class IsochroneFitter:
             feh = params["feh"]
             distance = params.get("distance")
             av = params.get("av")
+            vini = params.get("vini")
 
             # Get grid predictions (needed for both likelihood and IMF prior)
-            predicted = interp(eep=eep, log_age=log_age, feh=feh)
+            predicted = interp(eep=eep, log_age=log_age, feh=feh, vini=vini)
             if np.isnan(predicted.get("log_Teff", np.nan)):
                 return -np.inf
 
@@ -88,7 +92,7 @@ class IsochroneFitter:
             if not np.isfinite(lnp_eep):
                 return -np.inf
 
-            # Data likelihood
+            # Data likelihood (pass predicted to avoid double interpolation)
             if is_binary:
                 from lachesis.binary import binary_log_likelihood
                 lnl = binary_log_likelihood(
@@ -104,6 +108,7 @@ class IsochroneFitter:
                     interp, eep=eep, log_age=log_age, feh=feh,
                     observed=obs, uncertainties=unc,
                     bc_table=bc, distance=distance, av=av,
+                    predicted=predicted,
                 )
 
             if not np.isfinite(lnl):
@@ -111,6 +116,7 @@ class IsochroneFitter:
 
             return lnl + lnp_eep
 
+        dynesty_kwargs.setdefault("sample", "rwalk")
         sampler = dynesty.NestedSampler(
             loglike,
             prior.prior_transform,
@@ -141,4 +147,9 @@ class IsochroneFitter:
         eeps = samples[:, 0]
         ages = samples[:, 1]
         fehs = samples[:, 2]
-        return self.interp(eep=eeps, log_age=ages, feh=fehs)
+        vini = None
+        if self._has_vini:
+            # Vini is the last parameter
+            vini_idx = self.prior.param_names.index("vini")
+            vini = samples[:, vini_idx]
+        return self.interp(eep=eeps, log_age=ages, feh=fehs, vini=vini)
