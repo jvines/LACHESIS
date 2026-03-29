@@ -12,6 +12,14 @@ dependencies = [
     "scipy",
     "h5py",
     "requests",
+    "astropy",
+    "astroquery",
+    "regions",
+    "pandas>=3.0.1",
+    "dynesty>=3.0.0",
+    "numba>=0.64.0",
+    "arviz>=0.23.4",
+    "h5netcdf>=1.8.1",
 ]
 
 [project.optional-dependencies]
