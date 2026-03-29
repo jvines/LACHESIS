@@ -64,6 +64,98 @@ class Star:
             display_star_info(self)
 
     @classmethod
+    def from_ariadne_star(cls, ariadne_star, verbose: bool = True):
+        """Create a LACHESIS Star from an astroARIADNE Star object.
+
+        Extracts magnitudes, parallax, distance, and spectroscopic params.
+        Works with any ARIADNE Star — just pass the object directly.
+
+        Example
+        -------
+        >>> from astroARIADNE.star import Star as ARIADNEStar
+        >>> a = ARIADNEStar('HD 209458', 330.795, 18.884)
+        >>> s = Star.from_ariadne_star(a)
+        """
+        s = ariadne_star
+
+        # Extract magnitudes from ARIADNE's array-based storage
+        magnitudes = {}
+        if hasattr(s, 'mags') and hasattr(s, 'mag_errs') and hasattr(s, 'used_filters'):
+            for i, filt in enumerate(s.filter_names):
+                if s.used_filters[i] >= 1 and s.mag_errs[i] > 0:
+                    magnitudes[filt] = (float(s.mags[i]), float(s.mag_errs[i]))
+
+        # Extract parallax
+        plx = getattr(s, 'plx', None)
+        plx_e = getattr(s, 'plx_e', None)
+        if plx is not None and plx <= 0:
+            plx = None
+
+        # Extract distance
+        dist = getattr(s, 'dist', None)
+        dist_e = getattr(s, 'dist_e', None)
+        if dist is not None and dist <= 0:
+            dist = None
+
+        # Spectroscopic params (if available from RAVE or user input)
+        logg = getattr(s, 'logg', None)
+        logg_e = getattr(s, 'logg_e', None)
+        feh = None
+        feh_e = None
+        rave = getattr(s, 'rave_params', None)
+        if rave is not None:
+            feh = rave.get('feh')
+            feh_e = rave.get('feh_err')
+            if logg is None:
+                logg = rave.get('logg')
+                logg_e = rave.get('logg_err')
+
+        return cls(
+            s.starname,
+            logg=logg, logg_e=logg_e,
+            feh=feh, feh_e=feh_e,
+            parallax=plx, parallax_e=plx_e,
+            distance=dist, distance_e=dist_e,
+            magnitudes=magnitudes,
+            verbose=verbose,
+        )
+
+    @classmethod
+    def from_name(cls, name: str, verbose: bool = True, **kwargs):
+        """Create a Star by resolving a name via Simbad + Librarian.
+
+        Handles high proper motion stars by resolving the Gaia DR3 ID
+        through Simbad rather than relying on coordinate cone search.
+
+        Example
+        -------
+        >>> s = Star.from_name('HD 209458')
+        """
+        from astroquery.simbad import Simbad
+        from lachesis.librarian import Librarian
+
+        # Resolve coordinates
+        from astropy.coordinates import SkyCoord
+        coord = SkyCoord.from_name(name)
+        ra, dec = coord.ra.deg, coord.dec.deg
+
+        # Try to get Gaia DR3 ID from Simbad
+        gaia_id = None
+        try:
+            ids = Simbad.query_objectids(name)
+            if ids is not None:
+                for row in ids:
+                    rid = str(row[0]) if hasattr(row, '__getitem__') else str(row)
+                    if 'Gaia DR3' in rid:
+                        gaia_id = int(rid.split()[-1])
+                        break
+        except Exception:
+            pass
+
+        lib = Librarian(ra, dec, gaia_id=gaia_id, verbose=verbose, **kwargs)
+        return lib.to_star(name, verbose=verbose)
+
+    @classmethod
     def from_ariadne(cls, nc_path: str, starname: str | None = None, verbose: bool = True):
         """Load stellar properties from an ARIADNE InferenceData .nc file."""
         import arviz as az
@@ -124,9 +216,12 @@ class Star:
             obs["log_L"] = np.log10(self.luminosity)
         if self.radius is not None:
             obs["log_R"] = np.log10(self.radius)
-        # Photometric bands
-        for band, (mag, _err) in self.magnitudes.items():
-            obs[band] = mag
+        # Photometric bands — translate pyphot names to BC table names
+        from lachesis.filters import PYPHOT_TO_BC
+        for band, (mag, err) in self.magnitudes.items():
+            bc_name = PYPHOT_TO_BC.get(band)
+            if bc_name is not None and err > 0:
+                obs[bc_name] = mag
         return obs
 
     @property
@@ -143,8 +238,11 @@ class Star:
             unc["log_L"] = self.luminosity_e / (self.luminosity * np.log(10))
         if self.radius is not None and self.radius_e is not None:
             unc["log_R"] = self.radius_e / (self.radius * np.log(10))
+        from lachesis.filters import PYPHOT_TO_BC
         for band, (_mag, err) in self.magnitudes.items():
-            unc[band] = err
+            bc_name = PYPHOT_TO_BC.get(band)
+            if bc_name is not None and err > 0:
+                unc[bc_name] = err
         return unc
 
     @property
