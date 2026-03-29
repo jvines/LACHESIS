@@ -1,0 +1,23 @@
+# LACHESIS Plot Settings
+# Format is property value
+
+### GENERAL
+figsize 12,8
+fontsize 26
+fontname serif
+tick_labelsize 22
+
+### CORNER PLOT
+corner_fontsize 20
+corner_tick_fontsize 15
+corner_labelpad 15
+corner_med_c firebrick
+corner_med_style --
+corner_v_c lightcoral
+corner_v_style -.
+
+### HR DIAGRAM
+hr_figsize 12,8
+hr_cmap cool
+hr_marker *
+hr_color greenyellow
