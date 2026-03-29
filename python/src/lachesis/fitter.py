@@ -40,8 +40,90 @@ def _load_grid(name: str):
         if raw.exists() and list(raw.glob("*.csv")):
             return PARSECModelGrid(raw)
         raise GridError(f"PARSEC grid not found. Download via ezpadova first.")
+    elif name == "dartmouth":
+        from lachesis.config import DARTMOUTH_GRID_DIR, DARTMOUTH_RAW_DIR
+        from lachesis.grid.dartmouth import DartmouthModelGrid
+        h5 = DARTMOUTH_GRID_DIR / "dartmouth_dsep.h5"
+        if h5.exists():
+            return DartmouthModelGrid.from_hdf5(h5)
+        raw = DARTMOUTH_RAW_DIR
+        if raw.exists() and list(raw.glob("*.iso")):
+            return DartmouthModelGrid(raw)
+        raise GridError(
+            f"Dartmouth grid not found. Run: "
+            f"python -m lachesis.grid.dartmouth_download"
+        )
+    elif name == "basti":
+        from lachesis.config import BASTI_GRID_DIR, BASTI_RAW_DIR
+        from lachesis.grid.basti import BaSTIModelGrid
+        h5 = BASTI_GRID_DIR / "basti.h5"
+        if h5.exists():
+            return BaSTIModelGrid.from_hdf5(h5)
+        raw = BASTI_RAW_DIR
+        if raw.exists() and list(raw.glob("*.dat")):
+            return BaSTIModelGrid(raw)
+        raise GridError(
+            f"BaSTI grid not found. Run: "
+            f"python -m lachesis.grid.basti_download"
+        )
+    elif name == "yapsi":
+        from lachesis.config import YAPSI_GRID_DIR, YAPSI_RAW_DIR
+        from lachesis.grid.yapsi import YAPSIModelGrid
+        h5 = YAPSI_GRID_DIR / "yapsi.h5"
+        if h5.exists():
+            return YAPSIModelGrid.from_hdf5(h5)
+        raw = YAPSI_RAW_DIR
+        fits_files = list(raw.glob("*.fits"))
+        if raw.exists() and fits_files:
+            return YAPSIModelGrid(raw)
+        raise GridError(
+            f"YAPSI grid not found. Run: "
+            f"python -m lachesis.grid.yapsi_download"
+        )
+    elif name == "geneva":
+        from lachesis.config import GENEVA_GRID_DIR, GENEVA_RAW_DIR
+        from lachesis.grid.geneva import GenevaModelGrid
+        h5 = GENEVA_GRID_DIR / "geneva.h5"
+        if h5.exists():
+            return GenevaModelGrid.from_hdf5(h5)
+        raw = GENEVA_RAW_DIR
+        if raw.exists() and list(raw.glob("Isochr_*.dat")):
+            return GenevaModelGrid(raw)
+        raise GridError(
+            f"Geneva grid not found. Run: "
+            f"python -m lachesis.grid.geneva_download"
+        )
+    elif name == "bhac15":
+        from lachesis.config import BHAC15_GRID_DIR, BHAC15_RAW_DIR
+        from lachesis.grid.bhac15 import BHAC15ModelGrid
+        h5 = BHAC15_GRID_DIR / "bhac15.h5"
+        if h5.exists():
+            return BHAC15ModelGrid.from_hdf5(h5)
+        raw = BHAC15_RAW_DIR
+        if raw.exists() and list(raw.glob("BHAC15_iso.*")):
+            return BHAC15ModelGrid(raw)
+        raise GridError(
+            f"BHAC15 grid not found. Run: "
+            f"python -m lachesis.grid.bhac15_download"
+        )
+    elif name == "starevol":
+        from lachesis.config import STAREVOL_GRID_DIR, STAREVOL_RAW_DIR
+        from lachesis.grid.starevol import STAREVOLModelGrid
+        h5 = STAREVOL_GRID_DIR / "starevol.h5"
+        if h5.exists():
+            return STAREVOLModelGrid.from_hdf5(h5)
+        raw = STAREVOL_RAW_DIR
+        if raw.exists() and list(raw.glob("Isochr_*.dat")):
+            return STAREVOLModelGrid(raw)
+        raise GridError(
+            f"STAREVOL grid not found. Run: "
+            f"python -m lachesis.grid.starevol_download"
+        )
     else:
-        raise GridError(f"Unknown grid '{name}'. Available: mist, parsec")
+        raise GridError(
+            f"Unknown grid '{name}'. Available: "
+            f"mist, parsec, dartmouth, basti, yapsi, geneva, bhac15, starevol"
+        )
 
 
 class Fitter:
@@ -61,7 +143,7 @@ class Fitter:
 
     def __init__(self):
         self._star = None
-        self._grids = ["mist"]
+        self._grids = ["mist", "parsec", "dartmouth", "basti", "yapsi"]
         self._bma = False
         self._binary = False
         self._verbose = True
@@ -98,10 +180,12 @@ class Fitter:
 
     @grids.setter
     def grids(self, g):
-        valid = {"mist", "parsec"}
+        # starevol_vXX variants expand to base name for validation
+        valid_base = {"mist", "parsec", "dartmouth", "basti", "yapsi", "geneva", "bhac15", "starevol"}
         for name in g:
-            if name.lower() not in valid:
-                raise InputError(f"Unknown grid '{name}'. Available: {sorted(valid)}")
+            base = name.lower().split("_v")[0] if name.lower().startswith("starevol_v") else name.lower()
+            if base not in valid_base:
+                raise InputError(f"Unknown grid '{name}'. Available: {sorted(valid_base)}")
         self._grids = [name.lower() for name in g]
         self._initialized = False
 
@@ -193,6 +277,17 @@ class Fitter:
         if self._star is None:
             raise InputError("No star set. Assign f.star = Star(...) first.")
 
+        # BMA guardrails: BHAC15 and STAREVOL cannot participate in BMA
+        _BMA_FORBIDDEN = {"bhac15", "starevol"}
+        if self._bma:
+            forbidden = _BMA_FORBIDDEN & set(self._grids)
+            if forbidden:
+                raise InputError(
+                    f"Cannot use {forbidden} in BMA mode. "
+                    f"BHAC15 (single metallicity) and STAREVOL (rotation parameter) "
+                    f"are single-grid fit only."
+                )
+
         # Parse setup list
         self._parsed_setup = self._parse_setup(self._setup)
 
@@ -211,11 +306,22 @@ class Fitter:
         if self._bc_system or self._star.mode == "photometric":
             from lachesis.bc import BCTable
             from lachesis.config import MIST_RAW_DIR
-            system = self._bc_system or "UBVRIplus"
             bc_dir = MIST_RAW_DIR / "BC_tables"
             if not bc_dir.exists():
                 bc_dir = MIST_RAW_DIR.parent  # fallback
-            self._bc_table = BCTable(bc_dir, system=system)
+            if self._bc_system:
+                # Explicit single system requested
+                self._bc_table = BCTable(bc_dir, system=self._bc_system)
+            else:
+                # Load all available systems (WISE, SDSS, PanSTARRS, etc.)
+                self._bc_table = BCTable.multi_system(bc_dir)
+            # Restrict BC to only the bands the star actually uses
+            used_bands = [
+                k for k in self._star.observed
+                if k in self._bc_table._band_indices
+            ]
+            if used_bands:
+                self._bc_table.set_active_bands(used_bands)
 
         # Parse priors
         feh_prior = None
@@ -238,17 +344,31 @@ class Fitter:
         # Build IsochroneFitter per grid
         for name in self._grids:
             grid = self._grid_objects[name]
-            eep_lo = max(self._eep_range[0], grid.eep_range[0])
-            eep_hi = min(self._eep_range[1], grid.eep_range[1])
+            if hasattr(grid, "fitting_eep_range"):
+                eep_lo, eep_hi = grid.fitting_eep_range
+            else:
+                eep_lo = max(self._eep_range[0], grid.eep_range[0])
+                eep_hi = min(self._eep_range[1], grid.eep_range[1])
+            # Clamp age and [Fe/H] to each grid's actual coverage
+            grid_feh_lo = max(self._feh_range[0], float(grid.feh_values[0]))
+            grid_feh_hi = min(self._feh_range[1], float(grid.feh_values[-1]))
+            grid_age_lo = max(self._age_range[0], float(grid.age_values[0]))
+            grid_age_hi = min(self._age_range[1], float(grid.age_values[-1]))
+            # Rotation range for grids with a Vini axis (e.g. STAREVOL)
+            vini_range = None
+            if hasattr(grid, "vini_values") and grid.vini_values is not None:
+                vini_range = (float(grid.vini_values[0]), float(grid.vini_values[-1]))
+
             self._fitters[name] = IsochroneFitter(
                 interp=self._interpolators[name],
                 eep_range=(eep_lo, eep_hi),
-                age_range=self._age_range,
-                feh_range=self._feh_range,
+                age_range=(grid_age_lo, grid_age_hi),
+                feh_range=(grid_feh_lo, grid_feh_hi),
                 feh_prior=feh_prior,
                 bc_table=self._bc_table,
                 distance_range=distance_range,
                 av_range=av_range,
+                vini_range=vini_range,
                 binary=self._binary,
             )
 

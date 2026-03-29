@@ -17,6 +17,15 @@ class IsochroneGrid(Protocol):
     def eep_range(self) -> tuple[int, int]: ...
 
     @property
+    def fitting_eep_range(self) -> tuple[int, int]:
+        """EEP range for fitting (may exclude PMS/unphysical regions).
+
+        Defaults to eep_range. Override per grid if the full range
+        includes regions that shouldn't be sampled (e.g., PMS in MIST).
+        """
+        ...
+
+    @property
     def feh_values(self) -> NDArray[np.float64]: ...
 
     @property

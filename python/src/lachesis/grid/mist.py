@@ -215,6 +215,11 @@ class MISTGrid:
         return int(self._eep_values[0]), int(self._eep_values[-1])
 
     @property
+    def fitting_eep_range(self) -> tuple[int, int]:
+        """ZAMS (202) to TPAGB (808) — excludes PMS."""
+        return (max(202, int(self._eep_values[0])), min(808, int(self._eep_values[-1])))
+
+    @property
     def eep_values(self) -> np.ndarray:
         return self._eep_values
 
@@ -369,6 +374,11 @@ class MISTModelGrid:
     @property
     def eep_range(self) -> tuple[int, int]:
         return int(self._eep_values[0]), int(self._eep_values[-1])
+
+    @property
+    def fitting_eep_range(self) -> tuple[int, int]:
+        """ZAMS (202) to TPAGB (808) — excludes PMS."""
+        return (max(202, int(self._eep_values[0])), min(808, int(self._eep_values[-1])))
 
     @property
     def eep_values(self) -> np.ndarray:

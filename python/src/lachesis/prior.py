@@ -52,6 +52,7 @@ class IsochonePrior:
         feh_prior: tuple[str, ...] | None = None,
         distance_range: tuple[float, float] | None = None,
         av_range: tuple[float, float] | None = None,
+        vini_range: tuple[float, float] | None = None,
         binary: bool = False,
         imf: str = "chabrier",
     ):
@@ -71,10 +72,13 @@ class IsochonePrior:
 
         self._has_distance = distance_range is not None
         self._has_av = av_range is not None
+        self._has_vini = vini_range is not None
         if self._has_distance:
             self.dist_lo, self.dist_hi = distance_range
         if self._has_av:
             self.av_lo, self.av_hi = av_range
+        if self._has_vini:
+            self.vini_lo, self.vini_hi = vini_range
 
     @property
     def param_names(self) -> list[str]:
@@ -85,6 +89,8 @@ class IsochonePrior:
             names.append("distance")
         if self._has_av:
             names.append("av")
+        if self._has_vini:
+            names.append("vini")
         return names
 
     @property
@@ -113,6 +119,9 @@ class IsochonePrior:
             idx += 1
         if self._has_av:
             theta[idx] = self.av_lo + u[idx] * (self.av_hi - self.av_lo)
+            idx += 1
+        if self._has_vini:
+            theta[idx] = self.vini_lo + u[idx] * (self.vini_hi - self.vini_lo)
 
         return theta
 

@@ -155,6 +155,23 @@ class PARSECModelGrid:
                     self._data[fi, ai, ei, ci["eep"]] = eep_int
                     self._data[fi, ai, ei, ci["age"]] = age
 
+        # Fill inter-phase NaN gaps by interpolating along EEP axis.
+        # E.g., the He flash gap (EEP 605–631) gets bridged.
+        for fi in range(n_feh):
+            for ai in range(n_age):
+                for col_idx in range(n_cols):
+                    col_slice = self._data[fi, ai, :, col_idx]
+                    valid = np.isfinite(col_slice)
+                    if valid.sum() < 2:
+                        continue
+                    first = np.argmax(valid)
+                    last = len(valid) - 1 - np.argmax(valid[::-1])
+                    interior = slice(first, last + 1)
+                    x = np.where(valid[interior])[0]
+                    y = col_slice[interior][valid[interior]]
+                    xnew = np.arange(last - first + 1)
+                    col_slice[interior] = np.interp(xnew, x, y)
+
         # Compute log_R from L and Teff (PARSEC doesn't provide it directly)
         log_l = self._data[:, :, :, ci["log_L"]]
         log_te = self._data[:, :, :, ci["log_Teff"]]
@@ -201,6 +218,11 @@ class PARSECModelGrid:
     @property
     def eep_range(self) -> tuple[int, int]:
         return int(self._eep_values[0]), int(self._eep_values[-1])
+
+    @property
+    def fitting_eep_range(self) -> tuple[int, int]:
+        """ZAMS (202) to TPAGB (808) — PARSEC uses MIST's EEP scheme."""
+        return (max(202, int(self._eep_values[0])), min(808, int(self._eep_values[-1])))
 
     @property
     def columns(self) -> list[str]:
