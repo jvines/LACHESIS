@@ -20,3 +20,9 @@ julia/Manifest.toml
 
 # OS
 .DS_Store
+astroARIADNE/
+data/
+__pycache__/
+*.pyc
+.venv/
+uv.lock

@@ -20,110 +20,37 @@ from lachesis.sampler import IsochroneFitter
 from lachesis.star import Star
 
 
+_GRID_REGISTRY = {
+    "mist": ("lachesis.grid.mist", "MISTModelGrid", "mist_v1.2_vvcrit0.4.h5"),
+    "parsec": ("lachesis.grid.parsec", "PARSECModelGrid", "parsec_v1.2S.h5"),
+    "dartmouth": ("lachesis.grid.dartmouth", "DartmouthModelGrid", "dartmouth_dsep.h5"),
+    "basti": ("lachesis.grid.basti", "BaSTIModelGrid", "basti.h5"),
+    "yapsi": ("lachesis.grid.yapsi", "YAPSIModelGrid", "yapsi.h5"),
+    "geneva": ("lachesis.grid.geneva", "GenevaModelGrid", "geneva.h5"),
+    "bhac15": ("lachesis.grid.bhac15", "BHAC15ModelGrid", "bhac15.h5"),
+    "starevol": ("lachesis.grid.starevol", "STAREVOLModelGrid", "starevol.h5"),
+}
+
+
 def _load_grid(name: str):
-    """Load a named grid from HDF5 cache or raw data."""
-    from lachesis.config import MIST_GRID_DIR, PARSEC_DIR
+    """Load a named grid from shipped HDF5 cache."""
+    from importlib import import_module
+    from lachesis.config import GRID_DIR
 
     name = name.lower()
-    if name == "mist":
-        from lachesis.grid.mist import MISTModelGrid
-        h5 = MIST_GRID_DIR / "mist_v1.2_vvcrit0.4.h5"
-        if h5.exists():
-            return MISTModelGrid.from_hdf5(h5)
-        raise GridError(f"MIST grid not found at {h5}. Build it first.")
-    elif name == "parsec":
-        from lachesis.grid.parsec import PARSECModelGrid
-        h5 = MIST_GRID_DIR.parent.parent / "parsec" / "grids" / "parsec_v1.2S.h5"
-        if h5.exists():
-            return PARSECModelGrid.from_hdf5(h5)
-        raw = PARSEC_DIR
-        if raw.exists() and list(raw.glob("*.csv")):
-            return PARSECModelGrid(raw)
-        raise GridError(f"PARSEC grid not found. Download via ezpadova first.")
-    elif name == "dartmouth":
-        from lachesis.config import DARTMOUTH_GRID_DIR, DARTMOUTH_RAW_DIR
-        from lachesis.grid.dartmouth import DartmouthModelGrid
-        h5 = DARTMOUTH_GRID_DIR / "dartmouth_dsep.h5"
-        if h5.exists():
-            return DartmouthModelGrid.from_hdf5(h5)
-        raw = DARTMOUTH_RAW_DIR
-        if raw.exists() and list(raw.glob("*.iso")):
-            return DartmouthModelGrid(raw)
+    if name not in _GRID_REGISTRY:
         raise GridError(
-            f"Dartmouth grid not found. Run: "
-            f"python -m lachesis.grid.dartmouth_download"
+            f"Unknown grid '{name}'. Available: {sorted(_GRID_REGISTRY)}"
         )
-    elif name == "basti":
-        from lachesis.config import BASTI_GRID_DIR, BASTI_RAW_DIR
-        from lachesis.grid.basti import BaSTIModelGrid
-        h5 = BASTI_GRID_DIR / "basti.h5"
-        if h5.exists():
-            return BaSTIModelGrid.from_hdf5(h5)
-        raw = BASTI_RAW_DIR
-        if raw.exists() and list(raw.glob("*.dat")):
-            return BaSTIModelGrid(raw)
-        raise GridError(
-            f"BaSTI grid not found. Run: "
-            f"python -m lachesis.grid.basti_download"
-        )
-    elif name == "yapsi":
-        from lachesis.config import YAPSI_GRID_DIR, YAPSI_RAW_DIR
-        from lachesis.grid.yapsi import YAPSIModelGrid
-        h5 = YAPSI_GRID_DIR / "yapsi.h5"
-        if h5.exists():
-            return YAPSIModelGrid.from_hdf5(h5)
-        raw = YAPSI_RAW_DIR
-        fits_files = list(raw.glob("*.fits"))
-        if raw.exists() and fits_files:
-            return YAPSIModelGrid(raw)
-        raise GridError(
-            f"YAPSI grid not found. Run: "
-            f"python -m lachesis.grid.yapsi_download"
-        )
-    elif name == "geneva":
-        from lachesis.config import GENEVA_GRID_DIR, GENEVA_RAW_DIR
-        from lachesis.grid.geneva import GenevaModelGrid
-        h5 = GENEVA_GRID_DIR / "geneva.h5"
-        if h5.exists():
-            return GenevaModelGrid.from_hdf5(h5)
-        raw = GENEVA_RAW_DIR
-        if raw.exists() and list(raw.glob("Isochr_*.dat")):
-            return GenevaModelGrid(raw)
-        raise GridError(
-            f"Geneva grid not found. Run: "
-            f"python -m lachesis.grid.geneva_download"
-        )
-    elif name == "bhac15":
-        from lachesis.config import BHAC15_GRID_DIR, BHAC15_RAW_DIR
-        from lachesis.grid.bhac15 import BHAC15ModelGrid
-        h5 = BHAC15_GRID_DIR / "bhac15.h5"
-        if h5.exists():
-            return BHAC15ModelGrid.from_hdf5(h5)
-        raw = BHAC15_RAW_DIR
-        if raw.exists() and list(raw.glob("BHAC15_iso.*")):
-            return BHAC15ModelGrid(raw)
-        raise GridError(
-            f"BHAC15 grid not found. Run: "
-            f"python -m lachesis.grid.bhac15_download"
-        )
-    elif name == "starevol":
-        from lachesis.config import STAREVOL_GRID_DIR, STAREVOL_RAW_DIR
-        from lachesis.grid.starevol import STAREVOLModelGrid
-        h5 = STAREVOL_GRID_DIR / "starevol.h5"
-        if h5.exists():
-            return STAREVOLModelGrid.from_hdf5(h5)
-        raw = STAREVOL_RAW_DIR
-        if raw.exists() and list(raw.glob("Isochr_*.dat")):
-            return STAREVOLModelGrid(raw)
-        raise GridError(
-            f"STAREVOL grid not found. Run: "
-            f"python -m lachesis.grid.starevol_download"
-        )
-    else:
-        raise GridError(
-            f"Unknown grid '{name}'. Available: "
-            f"mist, parsec, dartmouth, basti, yapsi, geneva, bhac15, starevol"
-        )
+
+    module_path, class_name, h5_name = _GRID_REGISTRY[name]
+    h5 = GRID_DIR / h5_name
+    if not h5.exists():
+        raise GridError(f"{name} grid not found at {h5}")
+
+    mod = import_module(module_path)
+    cls = getattr(mod, class_name)
+    return cls.from_hdf5(h5)
 
 
 class Fitter:
@@ -305,10 +232,8 @@ class Fitter:
         # Load BC table if photometric mode
         if self._bc_system or self._star.mode == "photometric":
             from lachesis.bc import BCTable
-            from lachesis.config import MIST_RAW_DIR
-            bc_dir = MIST_RAW_DIR / "BC_tables"
-            if not bc_dir.exists():
-                bc_dir = MIST_RAW_DIR.parent  # fallback
+            from lachesis.config import BC_DIR
+            bc_dir = BC_DIR
             if self._bc_system:
                 # Explicit single system requested
                 self._bc_table = BCTable(bc_dir, system=self._bc_system)
