@@ -6,7 +6,7 @@ import pytest
 from lachesis.bc import BCTable
 
 
-BC_DIR = "/tmp"  # UBVRIplus files extracted here
+from lachesis.config import BC_DIR
 
 
 @pytest.fixture(scope="module")
@@ -14,7 +14,7 @@ def bc():
     try:
         return BCTable(BC_DIR, system="UBVRIplus")
     except FileNotFoundError:
-        pytest.skip("BC tables not extracted to /tmp")
+        pytest.skip("bc_tables.h5 not found")
 
 
 class TestBCTable:

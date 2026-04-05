@@ -85,39 +85,36 @@ _DEFAULT_SYSTEMS = ["UBVRIplus", "WISE", "SDSSugriz", "PanSTARRS", "SkyMapper", 
 
 
 class BCTable:
-    """Bolometric correction interpolator for a photometric system.
+    """Bolometric correction interpolator.
 
-    Parses MIST BC table files (one per [Fe/H]) and builds a 5D grid
-    over (Teff, logg, [Fe/H], Av, band). Uses numba JIT for fast
-    4D interpolation returning all bands in a single call.
+    Loads from a single HDF5 file (bc_tables.h5) containing all photometric
+    systems, compressed with gzip. Uses numba JIT for fast 4D interpolation
+    returning all bands in a single call.
     """
 
     def __init__(self, directory: str | Path, system: str = "UBVRIplus"):
         directory = Path(directory)
+        h5_path = directory / "bc_tables.h5"
+
+        if not h5_path.exists():
+            raise FileNotFoundError(f"BC table not found: {h5_path}")
+
+        import h5py
+        with h5py.File(h5_path, "r") as f:
+            if system not in f:
+                raise ValueError(
+                    f"System '{system}' not in bc_tables.h5. "
+                    f"Available: {list(f.keys())}"
+                )
+            grp = f[system]
+            raw = grp["data"][:].astype(np.float64)  # (n_feh, n_rows, n_cols)
+            self._feh_values = grp["feh_values"][:]
+            self._bands = [s.decode() for s in grp["band_names"][:]]
+
         self._system = system
 
-        files = sorted(directory.glob(f"feh*.{system}"))
-        if not files:
-            raise FileNotFoundError(
-                f"No BC files for system '{system}' in {directory}"
-            )
-
-        self._bands = self._parse_header(files[0])
-
-        all_data = []
-        fehs = []
-        for f in files:
-            feh, data = self._parse_file(f)
-            fehs.append(feh)
-            all_data.append(data)
-
-        order = np.argsort(fehs)
-        fehs = [fehs[i] for i in order]
-        all_data = [all_data[i] for i in order]
-
-        self._feh_values = np.array(fehs)
-
-        d0 = all_data[0]
+        # raw shape: (n_feh, n_rows, n_cols) where cols = Teff,logg,feh,Av,Rv,bands...
+        d0 = raw[0]
         self._teff_values = np.unique(d0[:, 0])
         self._logg_values = np.unique(d0[:, 1])
         self._av_values = np.unique(d0[:, 3])
@@ -133,7 +130,8 @@ class BCTable:
             (n_teff, n_logg, n_feh, n_av, n_bands), np.nan, dtype=np.float64
         )
 
-        for fi, data in enumerate(all_data):
+        for fi in range(n_feh):
+            data = raw[fi]
             for row in data:
                 ti = np.searchsorted(self._teff_values, row[0])
                 li = np.searchsorted(self._logg_values, row[1])
@@ -144,7 +142,6 @@ class BCTable:
 
     def _finalize(self):
         """Build contiguous arrays, band index, scipy fallback, JIT warmup."""
-        # Contiguous arrays for numba
         self._ax_teff = np.ascontiguousarray(self._teff_values, dtype=np.float64)
         self._ax_logg = np.ascontiguousarray(self._logg_values, dtype=np.float64)
         self._ax_feh = np.ascontiguousarray(self._feh_values, dtype=np.float64)
@@ -153,12 +150,10 @@ class BCTable:
         self._n_bands = len(self._bands)
         self._band_indices = {b: i for i, b in enumerate(self._bands)}
 
-        # Active bands (subset for faster interpolation). None = all bands.
         self._active_bands: list[str] | None = None
         self._active_idx: np.ndarray | None = None
         self._active_grid: np.ndarray | None = None
 
-        # JIT warmup
         if _HAS_NUMBA:
             grid = self._active_grid if self._active_grid is not None else self._grid
             _quadlinear(
@@ -168,7 +163,6 @@ class BCTable:
                 grid.shape[4],
             )
 
-        # Scipy fallback (only built if numba unavailable)
         self._scipy_interps = None
         if not _HAS_NUMBA:
             from scipy.interpolate import RegularGridInterpolator
@@ -185,58 +179,46 @@ class BCTable:
 
     @classmethod
     def multi_system(cls, directory: str | Path, systems: list[str] | None = None):
-        """Load multiple BC systems and merge into one BCTable.
+        """Load multiple BC systems from bc_tables.h5 and merge.
 
-        All MIST BC systems share identical (Teff, logg, [Fe/H], Av) axes,
+        All systems share identical (Teff, logg, [Fe/H], Av) axes,
         so their band columns are concatenated along axis 4 of the 5D grid.
-
-        Parameters
-        ----------
-        directory : path to BC_tables directory
-        systems : list of system names to load; defaults to all 6 standard
-            systems. Only systems with extracted files present are loaded.
-
-        Returns
-        -------
-        BCTable with bands from all requested systems merged.
         """
         if systems is None:
             systems = list(_DEFAULT_SYSTEMS)
 
         directory = Path(directory)
+        h5_path = directory / "bc_tables.h5"
 
-        # Filter to systems that actually have files on disk
-        available = []
-        for s in systems:
-            if list(directory.glob(f"feh*.{s}")):
-                available.append(s)
+        if not h5_path.exists():
+            raise FileNotFoundError(f"BC table not found: {h5_path}")
+
+        import h5py
+        with h5py.File(h5_path, "r") as f:
+            available = [s for s in systems if s in f]
+
         if not available:
             raise FileNotFoundError(
-                f"No BC files for any of {systems} in {directory}"
+                f"No BC systems found for {systems} in {h5_path}"
             )
 
-        # Load first system normally to get the axes
+        # Load first system to get axes
         first = cls(directory, system=available[0])
 
         if len(available) == 1:
             return first
 
-        # Collect grids and bands from remaining systems; concatenate along
-        # the band axis. Duplicate band names are skipped (first wins).
+        # Merge additional systems
         merged_bands = list(first._bands)
         seen = set(merged_bands)
         grids = [first._grid]
 
         for sysname in available[1:]:
-            extra = cls.__new__(cls)
-            extra._system = sysname
-            files = sorted(directory.glob(f"feh*.{sysname}"))
-            extra_bands = extra._parse_header(files[0])
+            extra = cls(directory, system=sysname)
 
-            # Determine which band columns are new
             new_idx = []
             new_names = []
-            for i, b in enumerate(extra_bands):
+            for i, b in enumerate(extra._bands):
                 if b not in seen:
                     new_idx.append(i)
                     new_names.append(b)
@@ -245,58 +227,14 @@ class BCTable:
             if not new_names:
                 continue
 
-            # Parse files for this system
-            all_data = []
-            fehs = []
-            for f in files:
-                feh, data = extra._parse_file(f)
-                fehs.append(feh)
-                all_data.append(data)
-
-            order = np.argsort(fehs)
-            all_data = [all_data[i] for i in order]
-
-            n_new = len(new_names)
-            extra_grid = np.full(
-                (len(first._teff_values), len(first._logg_values),
-                 len(first._feh_values), len(first._av_values), n_new),
-                np.nan, dtype=np.float64,
-            )
-
-            for fi, data in enumerate(all_data):
-                for row in data:
-                    ti = np.searchsorted(first._teff_values, row[0])
-                    li = np.searchsorted(first._logg_values, row[1])
-                    ai = np.searchsorted(first._av_values, row[3])
-                    all_bc = row[5:]
-                    extra_grid[ti, li, fi, ai, :] = all_bc[new_idx]
-
-            grids.append(extra_grid)
+            grids.append(extra._grid[:, :, :, :, new_idx])
             merged_bands.extend(new_names)
 
-        # Build the merged BCTable by overwriting internals of `first`
         first._system = "+".join(available)
         first._bands = merged_bands
         first._grid = np.concatenate(grids, axis=4)
         first._finalize()
         return first
-
-    def _parse_header(self, path: Path) -> list[str]:
-        """Extract band names from the header."""
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("#") and "Teff" in line and "logg" in line:
-                    parts = line.lstrip("#").split()
-                    # Skip Teff, logg, [Fe/H], Av, Rv → rest are band names
-                    return parts[5:]
-        raise ValueError(f"Could not find band names in {path}")
-
-    def _parse_file(self, path: Path) -> tuple[float, np.ndarray]:
-        """Parse a single BC file, return ([Fe/H], data_array)."""
-        data = np.loadtxt(path, comments="#")
-        feh = data[0, 2]  # [Fe/H] column
-        return feh, data
 
     @property
     def bands(self) -> list[str]:
@@ -319,11 +257,7 @@ class BCTable:
         return self._av_values
 
     def set_active_bands(self, bands: list[str]):
-        """Restrict interpolation to only these bands (major speedup).
-
-        Call this once before fitting. Pass the band names from Star.observed
-        that have BC table entries.
-        """
+        """Restrict interpolation to only these bands (major speedup)."""
         idx = []
         valid = []
         for b in bands:
@@ -348,11 +282,7 @@ class BCTable:
         feh: float,
         av: float,
     ) -> dict[str, float]:
-        """Interpolate BC at (Teff, logg, [Fe/H], Av).
-
-        Returns dict of band_name → BC value. If set_active_bands was called,
-        only those bands are interpolated.
-        """
+        """Interpolate BC at (Teff, logg, [Fe/H], Av)."""
         band_names = self._active_bands if self._active_bands is not None else self._bands
         grid = self._active_grid if self._active_grid is not None else self._grid
         n = len(band_names)
