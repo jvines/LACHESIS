@@ -9,7 +9,7 @@ import pytest
 from matplotlib.figure import Figure
 
 from lachesis.bma import BMAResult
-from lachesis.plotter import IsoPlotter, _extract_param, _percentile_str
+from lachesis.plotter import ISOPlotter, _extract_param, _percentile_str
 
 
 # -----------------------------------------------------------------------

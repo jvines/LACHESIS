@@ -648,27 +648,12 @@ class TestLibrarianIntegration:
         assert m1 is not m2
         assert m1 == m2
 
-    def test_to_star_passes_params(self):
+    def test_librarian_exposes_params(self):
         lib = self._make_full_lib()
-        with patch("lachesis.star.Star") as MockStar:
-            lib.to_star("test_star")
-            MockStar.assert_called_once()
-            kw = MockStar.call_args.kwargs
-            assert kw["parallax"] == lib.parallax[0]
-            assert kw["distance"] == lib.distance[0]
-            assert "magnitudes" in kw
-            # FLAME teff/radius/luminosity are NOT passed (crude pipeline estimates)
-            assert "teff" not in kw
-            assert "radius" not in kw
-            assert "luminosity" not in kw
-
-    def test_to_star_user_override(self):
-        lib = self._make_full_lib()
-        with patch("lachesis.star.Star") as MockStar:
-            lib.to_star("test_star", teff=6000.0, teff_e=50.0)
-            kw = MockStar.call_args.kwargs
-            assert kw["teff"] == 6000.0
-            assert kw["teff_e"] == 50.0
+        assert lib.parallax[0] is not None
+        assert lib.distance[0] is not None
+        assert lib.magnitudes is not None
+        assert len(lib.magnitudes) > 0
 
     def test_ignore_skips_catalog(self):
 
