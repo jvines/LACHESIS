@@ -4,7 +4,7 @@ __version__ = "0.1.0"
 
 from lachesis.star import Star
 from lachesis.fitter import Fitter
-from lachesis.plotter import IsoPlotter
+from lachesis.plotter import ISOPlotter
 
 
 def fit(starname, ra=None, dec=None, gaia_id=None,
@@ -44,12 +44,26 @@ def fit(starname, ra=None, dec=None, gaia_id=None,
     """
     if isinstance(starname, Star):
         star = starname
-    elif ra is not None and dec is not None:
-        from lachesis.librarian import Librarian
-        lib = Librarian(ra, dec, gaia_id=gaia_id, verbose=verbose)
-        star = lib.to_star(starname, verbose=verbose)
     else:
-        star = Star.from_name(starname, verbose=verbose)
+        if ra is None or dec is None:
+            # Resolve coordinates from name via Simbad
+            from astropy.coordinates import SkyCoord
+            coord = SkyCoord.from_name(starname)
+            ra, dec = coord.ra.deg, coord.dec.deg
+            # Try to get Gaia DR3 ID from Simbad if not provided
+            if gaia_id is None:
+                try:
+                    from astroquery.simbad import Simbad
+                    ids = Simbad.query_objectids(starname)
+                    if ids is not None:
+                        for row in ids:
+                            rid = str(row[0]) if hasattr(row, '__getitem__') else str(row)
+                            if 'Gaia DR3' in rid:
+                                gaia_id = int(rid.split()[-1])
+                                break
+                except Exception:
+                    pass
+        star = Star(starname, ra, dec, g_id=gaia_id, verbose=verbose)
 
     f = Fitter()
     f.star = star
@@ -66,4 +80,4 @@ def fit(starname, ra=None, dec=None, gaia_id=None,
         return f.fit()
 
 
-__all__ = ["Star", "Fitter", "IsoPlotter", "fit", "__version__"]
+__all__ = ["Star", "Fitter", "ISOPlotter", "fit", "__version__"]

@@ -2,56 +2,140 @@
 
 import numpy as np
 
-from lachesis.display import display_banner, display_star_info
+from lachesis.display import display_banner
 from lachesis.error import InputError
 
 
 class Star:
     """Observed stellar properties for isochrone fitting.
 
-    Mimics ARIADNE's Star but for the reverse problem: given stellar params,
-    infer age/mass/evolutionary state via isochrone fitting.
+    Matches ARIADNE's Star interface: provide a name, RA, DEC, and optionally
+    a Gaia DR3 ID. The Librarian runs internally to retrieve photometry,
+    parallax, and spectroscopic priors automatically.
+
+    Parameters
+    ----------
+    starname : str
+        Star name (for identification).
+    ra, dec : float
+        Right ascension and declination in degrees.
+    g_id : int, optional
+        Gaia DR3 source_id. Bypasses cone search for high-PM stars.
+    magnitudes : dict, optional
+        Pre-computed magnitudes dict {filter: (mag, err)}. If provided,
+        skips the automatic photometry retrieval.
+    plx, plx_e : float, optional
+        Parallax and error in mas. Overrides Gaia lookup.
+    dist, dist_e : float, optional
+        Distance and error in pc. Overrides parallax-derived distance.
+    logg, logg_e : float, optional
+        Surface gravity and error. Overrides spectroscopic lookup.
+    feh, feh_e : float, optional
+        Metallicity and error. Overrides spectroscopic lookup.
+    Av : float, optional
+        Maximum extinction in V band.
+    verbose : bool
+        Print retrieval progress (default True).
+
+    Examples
+    --------
+    >>> from lachesis.star import Star
+    >>> s = Star('HD 209458', 330.795, 18.884)
+    >>> s = Star('HD 103095', 178.0, 6.6, g_id=4034171629042489088)
     """
 
     def __init__(
         self,
         starname: str,
-        *,
-        teff: float | None = None,
-        teff_e: float | None = None,
+        ra: float,
+        dec: float,
+        g_id: int | None = None,
+        magnitudes: dict | None = None,
+        plx: float | None = None,
+        plx_e: float | None = None,
+        dist: float | None = None,
+        dist_e: float | None = None,
         logg: float | None = None,
         logg_e: float | None = None,
         feh: float | None = None,
         feh_e: float | None = None,
-        luminosity: float | None = None,
-        luminosity_e: float | None = None,
-        radius: float | None = None,
-        radius_e: float | None = None,
-        parallax: float | None = None,
-        parallax_e: float | None = None,
-        distance: float | None = None,
-        distance_e: float | None = None,
-        magnitudes: dict | None = None,
         Av: float | None = None,
         verbose: bool = True,
+        dustmap: str = 'SFD',
     ):
         self.starname = starname
-        self.teff = teff
-        self.teff_e = teff_e
-        self.logg = logg
-        self.logg_e = logg_e
-        self.feh = feh
-        self.feh_e = feh_e
-        self.luminosity = luminosity
-        self.luminosity_e = luminosity_e
-        self.radius = radius
-        self.radius_e = radius_e
-        self.parallax = parallax
-        self.parallax_e = parallax_e
-        self.distance = distance
-        self.distance_e = distance_e
-        self.magnitudes = magnitudes or {}
-        self.Av = Av
+        self.ra = ra
+        self.dec = dec
+        self.g_id = g_id
+        self.external_posteriors = {}  # populated by from_ariadne()
+        self.feh_posterior = None       # populated by from_ariadne()
+
+        if magnitudes is None:
+            if verbose:
+                from termcolor import colored
+                c = display_banner(starname)
+                print(colored(f'\t\t*** LOOKING UP ARCHIVAL INFORMATION ***', c))
+            from lachesis.librarian import Librarian
+            lib = Librarian(ra, dec, gaia_id=g_id, verbose=verbose)
+
+            # Bright star warning
+            gmag = lib.magnitudes.get("Gaia_G", (None,))[0]
+            vmag = lib.magnitudes.get("GROUND_JOHNSON_V", (None,))[0]
+            bright_mag = gmag if gmag is not None else vmag
+            if bright_mag is not None and bright_mag < 2.0:
+                import logging
+                logging.getLogger("lachesis").warning(
+                    "%s is very bright (mag=%.1f). Survey photometry is likely "
+                    "saturated — fit results may be unreliable.",
+                    starname, bright_mag,
+                )
+
+            # Copy retrieved data, allow user overrides
+            self.magnitudes = lib.magnitudes
+            self.parallax = plx if plx is not None else lib._parallax
+            self.parallax_e = plx_e if plx_e is not None else lib._parallax_e
+            self.distance = dist if dist is not None else lib._distance
+            self.distance_e = dist_e if dist_e is not None else lib._distance_e
+            self.teff = lib._teff
+            self.teff_e = lib._teff_e
+            self.Av = Av if Av is not None else lib.Av
+            self.luminosity = None
+            self.luminosity_e = None
+            self.radius = None
+            self.radius_e = None
+
+            # Spectroscopic priors: user override > Librarian lookup
+            sp = lib._spectroscopic_params
+            if sp:
+                self.logg = logg if logg is not None else sp.get("logg")
+                self.logg_e = logg_e if logg_e is not None else sp.get("logg_err")
+                self.feh = feh if feh is not None else sp.get("feh")
+                self.feh_e = feh_e if feh_e is not None else sp.get("feh_err")
+            else:
+                self.logg = logg
+                self.logg_e = logg_e
+                self.feh = feh
+                self.feh_e = feh_e
+        else:
+            # User provided magnitudes — skip Librarian
+            if verbose:
+                display_banner(starname)
+            self.magnitudes = magnitudes
+            self.parallax = plx
+            self.parallax_e = plx_e
+            self.distance = dist
+            self.distance_e = dist_e
+            self.logg = logg
+            self.logg_e = logg_e
+            self.feh = feh
+            self.feh_e = feh_e
+            self.Av = Av
+            self.teff = None
+            self.teff_e = None
+            self.luminosity = None
+            self.luminosity_e = None
+            self.radius = None
+            self.radius_e = None
 
         # Derive distance from parallax if not given
         if self.distance is None and self.parallax is not None and self.parallax > 0:
@@ -59,9 +143,59 @@ class Star:
             if self.parallax_e is not None:
                 self.distance_e = self.distance * (self.parallax_e / self.parallax)
 
-        if verbose:
-            display_banner(starname)
-            display_star_info(self)
+        # Max line-of-sight extinction from dustmaps (like ARIADNE)
+        if self.Av is None:
+            self._query_extinction(dustmap)
+
+    _DUSTMAPS = {
+        'SFD': ('dustmaps.sfd', 'SFDQuery'),
+        'Lenz': ('dustmaps.lenz2017', 'Lenz2017Query'),
+        'Planck13': ('dustmaps.planck', 'PlanckQuery'),
+        'Planck16': ('dustmaps.planck', 'PlanckGNILCQuery'),
+        'Bayestar': ('dustmaps.bayestar', 'BayestarQuery'),
+    }
+
+    def _query_extinction(self, dustmap='SFD'):
+        """Query max line-of-sight Av from dustmaps (matching ARIADNE)."""
+        from importlib import import_module
+        from astropy.coordinates import SkyCoord
+        import astropy.units as u
+
+        if dustmap not in self._DUSTMAPS:
+            self.Av = 0.1
+            return
+
+        mod_path, cls_name = self._DUSTMAPS[dustmap]
+        try:
+            mod = import_module(mod_path)
+            dmap = getattr(mod, cls_name)()
+        except Exception:
+            self.Av = 0.1
+            return
+
+        d = self.distance if self.distance is not None else 1000.0
+        coords = SkyCoord(self.ra, self.dec, distance=d,
+                          unit=(u.deg, u.deg, u.pc), frame='icrs')
+
+        try:
+            if dustmap in ('SFD', 'Lenz'):
+                ebv = dmap(coords)
+                self.Av = float(ebv) * 2.742
+            elif dustmap == 'Bayestar':
+                ebvs = dmap(coords, mode='percentile', pct=[15, 50, 84])
+                if np.any(np.isnan(ebvs)):
+                    # Fallback to SFD
+                    sfd_mod = import_module('dustmaps.sfd')
+                    ebv = sfd_mod.SFDQuery()(coords)
+                    self.Av = float(ebv) * 2.742
+                else:
+                    mags = ebvs * 2.742 * 0.884
+                    self.Av = float(mags[1])
+            elif dustmap in ('Planck13', 'Planck16'):
+                ebv = dmap(coords)
+                self.Av = float(ebv) * 3.1
+        except Exception:
+            self.Av = 0.1
 
     @classmethod
     def from_ariadne_star(cls, ariadne_star, verbose: bool = True):
@@ -78,86 +212,57 @@ class Star:
         """
         s = ariadne_star
 
-        # Extract magnitudes from ARIADNE's array-based storage
         magnitudes = {}
         if hasattr(s, 'mags') and hasattr(s, 'mag_errs') and hasattr(s, 'used_filters'):
             for i, filt in enumerate(s.filter_names):
                 if s.used_filters[i] >= 1 and s.mag_errs[i] > 0:
                     magnitudes[filt] = (float(s.mags[i]), float(s.mag_errs[i]))
 
-        # Extract parallax
         plx = getattr(s, 'plx', None)
         plx_e = getattr(s, 'plx_e', None)
         if plx is not None and plx <= 0:
             plx = None
 
-        # Extract distance
         dist = getattr(s, 'dist', None)
         dist_e = getattr(s, 'dist_e', None)
         if dist is not None and dist <= 0:
             dist = None
 
-        # Spectroscopic params (if available from RAVE or user input)
         logg = getattr(s, 'logg', None)
         logg_e = getattr(s, 'logg_e', None)
         feh = None
         feh_e = None
-        rave = getattr(s, 'rave_params', None)
-        if rave is not None:
-            feh = rave.get('feh')
-            feh_e = rave.get('feh_err')
+        sp = getattr(s, 'spectroscopic_params', None) or getattr(s, 'rave_params', None)
+        if sp is not None:
+            feh = sp.get('feh')
+            feh_e = sp.get('feh_err')
             if logg is None:
-                logg = rave.get('logg')
-                logg_e = rave.get('logg_err')
+                logg = sp.get('logg')
+                logg_e = sp.get('logg_err')
 
         return cls(
-            s.starname,
+            s.starname, s.ra, s.dec,
+            magnitudes=magnitudes,
             logg=logg, logg_e=logg_e,
             feh=feh, feh_e=feh_e,
-            parallax=plx, parallax_e=plx_e,
-            distance=dist, distance_e=dist_e,
-            magnitudes=magnitudes,
+            plx=plx, plx_e=plx_e,
+            dist=dist, dist_e=dist_e,
             verbose=verbose,
         )
 
     @classmethod
-    def from_name(cls, name: str, verbose: bool = True, **kwargs):
-        """Create a Star by resolving a name via Simbad + Librarian.
+    def from_ariadne(cls, nc_path: str, starname: str | None = None,
+                     ra: float | None = None, dec: float | None = None,
+                     g_id: int | None = None, verbose: bool = True):
+        """Load stellar properties from an ARIADNE InferenceData .nc file.
 
-        Handles high proper motion stars by resolving the Gaia DR3 ID
-        through Simbad rather than relying on coordinate cone search.
+        Stores full posterior sample arrays as external priors for the
+        isochrone fit. The Fitter builds KDEs from these automatically.
 
-        Example
-        -------
-        >>> s = Star.from_name('HD 209458')
+        If ra/dec are provided, photometry is retrieved via the Librarian
+        so that the isochrone fit uses both the ARIADNE priors AND the
+        photometric data (no double-counting — see docs).
         """
-        from astroquery.simbad import Simbad
-        from lachesis.librarian import Librarian
-
-        # Resolve coordinates
-        from astropy.coordinates import SkyCoord
-        coord = SkyCoord.from_name(name)
-        ra, dec = coord.ra.deg, coord.dec.deg
-
-        # Try to get Gaia DR3 ID from Simbad
-        gaia_id = None
-        try:
-            ids = Simbad.query_objectids(name)
-            if ids is not None:
-                for row in ids:
-                    rid = str(row[0]) if hasattr(row, '__getitem__') else str(row)
-                    if 'Gaia DR3' in rid:
-                        gaia_id = int(rid.split()[-1])
-                        break
-        except Exception:
-            pass
-
-        lib = Librarian(ra, dec, gaia_id=gaia_id, verbose=verbose, **kwargs)
-        return lib.to_star(name, verbose=verbose)
-
-    @classmethod
-    def from_ariadne(cls, nc_path: str, starname: str | None = None, verbose: bool = True):
-        """Load stellar properties from an ARIADNE InferenceData .nc file."""
         import arviz as az
 
         idata = az.from_netcdf(nc_path)
@@ -167,40 +272,65 @@ class Star:
             from pathlib import Path
             starname = Path(nc_path).stem
 
-        def _extract(name):
-            if name in post:
-                arr = post[name].values.flatten()
+        def _samples(*names):
+            for n in names:
+                if n in post:
+                    return post[n].values.flatten()
+            return None
+
+        def _summary(arr):
+            if arr is not None:
                 return float(np.median(arr)), float(np.std(arr))
             return None, None
 
-        # ARIADNE name mapping
-        teff, teff_e = _extract("Teff")
-        if teff is None:
-            teff, teff_e = _extract("teff")
-        logg, logg_e = _extract("logg")
-        feh, feh_e = _extract("feh")
-        if feh is None:
-            feh, feh_e = _extract("z")
-        lum, lum_e = _extract("luminosity")
-        if lum is None:
-            lum, lum_e = _extract("lum")
-        rad, rad_e = _extract("radius")
-        if rad is None:
-            rad, rad_e = _extract("rad")
-        dist, dist_e = _extract("distance")
-        if dist is None:
-            dist, dist_e = _extract("dist")
+        # Extract full posterior arrays (ARIADNE name mapping)
+        teff_arr = _samples("Teff", "teff")
+        logg_arr = _samples("logg")
+        feh_arr = _samples("feh", "z")
+        rad_arr = _samples("radius", "rad")
+        dist_arr = _samples("distance", "dist")
 
-        return cls(
-            starname,
-            teff=teff, teff_e=teff_e,
-            logg=logg, logg_e=logg_e,
-            feh=feh, feh_e=feh_e,
-            luminosity=lum, luminosity_e=lum_e,
-            radius=rad, radius_e=rad_e,
-            distance=dist, distance_e=dist_e,
-            verbose=verbose,
-        )
+        teff, teff_e = _summary(teff_arr)
+        logg, logg_e = _summary(logg_arr)
+        feh, feh_e = _summary(feh_arr)
+        rad, rad_e = _summary(rad_arr)
+        dist, dist_e = _summary(dist_arr)
+
+        if ra is not None and dec is not None:
+            # Retrieve photometry via Librarian, use ARIADNE priors on top
+            star = cls(
+                starname, ra, dec, g_id=g_id,
+                logg=logg, logg_e=logg_e,
+                feh=feh, feh_e=feh_e,
+                verbose=verbose,
+            )
+        else:
+            # No coordinates — spectroscopic-only using ARIADNE params directly
+            star = cls(
+                starname, 0.0, 0.0,
+                magnitudes={},
+                logg=logg, logg_e=logg_e,
+                feh=feh, feh_e=feh_e,
+                dist=dist, dist_e=dist_e,
+                verbose=verbose,
+            )
+        star.teff = teff
+        star.teff_e = teff_e
+        star.radius = rad
+        star.radius_e = rad_e
+
+        # Store posterior samples in two categories:
+        #
+        # 1. feh_posterior: sampled parameter → fed through prior transform
+        #    as a KDE-based inverse CDF, preserving full distribution shape.
+        # 2. external_posteriors (logg): derived grid quantity → evaluated
+        #    as a KDE penalty in the likelihood, since it isn't sampled.
+        star.feh_posterior = feh_arr  # full samples, not just mean/std
+        star.external_posteriors = {}
+        if logg_arr is not None:
+            star.external_posteriors["log_g"] = logg_arr
+
+        return star
 
     @property
     def observed(self) -> dict[str, float]:
@@ -245,8 +375,3 @@ class Star:
                 unc[bc_name] = err
         return unc
 
-    @property
-    def mode(self) -> str:
-        if self.magnitudes and self.distance is not None:
-            return "photometric"
-        return "spectroscopic"

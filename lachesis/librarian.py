@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=UserWarning, append=True)
 Vizier.ROW_LIMIT = -1
 Vizier.columns = ["all"]
+Vizier.TIMEOUT = 60
+Gaia.TIMEOUT = 60
+XMatch.TIMEOUT = 60
+Catalogs.TIMEOUT = 60
 
 
 # ── Data structures ──────────────────────────────────────────────
@@ -55,6 +59,32 @@ class CatalogDef:
 
 
 # ── Helpers ──────────────────────────────────────────────────────
+
+_QUERY_TIMEOUT = 60  # seconds per network query
+
+
+def _with_timeout(func, *args, timeout=_QUERY_TIMEOUT, **kwargs):
+    """Run any callable with a hard timeout. Returns None on timeout or error."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(func, *args, **kwargs)
+        try:
+            return future.result(timeout=timeout)
+        except FuturesTimeout:
+            logger.warning("Query timed out after %ds", timeout)
+            return None
+        except Exception as e:
+            logger.warning("Query failed: %s", e)
+            return None
+
+
+def _tap_query(service, query, timeout=_QUERY_TIMEOUT):
+    """Run a TAP async query with a hard timeout. Returns astropy Table or None."""
+    def _run():
+        job = service.launch_job_async(query)
+        return job.get_results()
+    return _with_timeout(_run, timeout=timeout)
 
 
 def _col(row, col):
@@ -360,6 +390,7 @@ class Librarian:
         self._spectroscopic_params: dict | None = None
         self._tic_id: int | None = None
         self._kic_id: int | None = None
+        self.Av: float | None = None
 
         self._resolve_gaia_id()
         self._query_gaia_params()
@@ -367,6 +398,7 @@ class Librarian:
         self._query_bailer_jones()
         self._fetch_photometry()
         self._query_spectroscopic_priors()
+        self._query_extinction()
 
         if verbose:
             self._print_summary()
@@ -529,34 +561,16 @@ class Librarian:
                 f"WHERE xmatch.source_id = {self._gaia_id}"
             )
 
-            try:
-                job = Gaia.launch_job_async(query)
-                result = job.get_results()
-                if len(result) > 0:
-                    self._ids[cat_name] = result[0][0]
-                else:
-                    self._ids[cat_name] = None
-                    logger.info("No %s crossmatch for Gaia %d", cat_name, self._gaia_id)
-            except Exception as e:
-                err_str = str(e).lower()
-                is_service_error = any(
-                    s in err_str
-                    for s in (
-                        "service unavailable",
-                        "bad gateway",
-                        "503",
-                        "502",
-                        "500",
-                        "connection",
-                        "timeout",
-                        "unavailable",
-                    )
-                )
-                if is_service_error:
-                    tap_down = True
-                    xmatch_needed.append(cat_name)
+            result = _tap_query(Gaia, query)
+            if result is None:
+                tap_down = True
+                xmatch_needed.append(cat_name)
                 self._ids[cat_name] = None
-                logger.warning("Crossmatch failed for %s: %s", cat_name, e)
+            elif len(result) > 0:
+                self._ids[cat_name] = result[0][0]
+            else:
+                self._ids[cat_name] = None
+                logger.info("No %s crossmatch for Gaia %d", cat_name, self._gaia_id)
 
         if xmatch_needed:
             logger.warning(
@@ -853,23 +867,19 @@ class Librarian:
             f"WHERE xmatch.source_id = {self._gaia_id}"
         )
 
-        try:
-            job = Gaia.launch_job_async(query)
-            result = job.get_results()
-            if len(result) == 0:
-                return
+        result = _tap_query(Gaia, query)
+        if result is None or len(result) == 0:
+            return
 
-            row = result[0]
-            for band in _CATALOGS["APASS"].bands:
-                if band.pyphot in self._magnitudes:
-                    continue
-                mag_v = _col(row, band.col)
-                err_v = _col(row, band.err_col)
-                if _qc_mag(mag_v, err_v):
-                    err_f = float(err_v) if err_v is not None else 0.02
-                    self._add_mag(band.pyphot, float(mag_v), err_f)
-        except Exception as e:
-            logger.warning("APASS query via Gaia TAP failed: %s", e)
+        row = result[0]
+        for band in _CATALOGS["APASS"].bands:
+            if band.pyphot in self._magnitudes:
+                continue
+            mag_v = _col(row, band.col)
+            err_v = _col(row, band.err_col)
+            if _qc_mag(mag_v, err_v):
+                err_f = float(err_v) if err_v is not None else 0.02
+                self._add_mag(band.pyphot, float(mag_v), err_f)
 
     def _fetch_skymapper(self):
         """Query SkyMapper DR2 via SkyMapper TAP service."""
@@ -879,33 +889,29 @@ class Librarian:
 
         from astroquery.utils.tap.core import TapPlus
 
-        try:
-            tap = TapPlus(url="https://api.skymapper.nci.org.au/public/tap/")
-            query = (
-                "SELECT object_id, u_psf, e_u_psf, v_psf, e_v_psf, "
-                "g_psf, e_g_psf, r_psf, e_r_psf, i_psf, e_i_psf, "
-                "z_psf, e_z_psf, flags "
-                f"FROM dr2.master WHERE object_id = {sm_id}"
-            )
-            job = tap.launch_job_async(query)
-            result = job.get_results()
-            if len(result) == 0:
-                return
+        tap = TapPlus(url="https://api.skymapper.nci.org.au/public/tap/")
+        query = (
+            "SELECT object_id, u_psf, e_u_psf, v_psf, e_v_psf, "
+            "g_psf, e_g_psf, r_psf, e_r_psf, i_psf, e_i_psf, "
+            "z_psf, e_z_psf, flags "
+            f"FROM dr2.master WHERE object_id = {sm_id}"
+        )
+        result = _tap_query(tap, query)
+        if result is None or len(result) == 0:
+            return
 
-            row = result[0]
-            if not _qc_skymapper(row):
-                return
+        row = result[0]
+        if not _qc_skymapper(row):
+            return
 
-            for band in _CATALOGS["SkyMapper"].bands:
-                if band.pyphot in self._magnitudes:
-                    continue
-                mag_v = _col(row, band.col)
-                err_v = _col(row, band.err_col)
-                if _qc_mag(mag_v, err_v):
-                    err_f = float(err_v) if err_v is not None else 0.02
-                    self._add_mag(band.pyphot, float(mag_v), err_f)
-        except Exception as e:
-            logger.warning("SkyMapper TAP query failed: %s", e)
+        for band in _CATALOGS["SkyMapper"].bands:
+            if band.pyphot in self._magnitudes:
+                continue
+            mag_v = _col(row, band.col)
+            err_v = _col(row, band.err_col)
+            if _qc_mag(mag_v, err_v):
+                err_f = float(err_v) if err_v is not None else 0.02
+                self._add_mag(band.pyphot, float(mag_v), err_f)
 
     def _fetch_galex(self):
         """Query GALEX via VizieR XMatch with Gaia DR3."""
@@ -1295,6 +1301,21 @@ class Librarian:
             logger.warning("PASTEL query failed: %s", e)
             return None
 
+    def _query_extinction(self):
+        """Query max line-of-sight Av from SFD dustmap."""
+        try:
+            from dustmaps.sfd import SFDQuery
+            from astropy.coordinates import SkyCoord
+            import astropy.units as u
+
+            d = self._distance if self._distance is not None else 1000.0
+            coords = SkyCoord(self.ra, self.dec, distance=d,
+                              unit=(u.deg, u.deg, u.pc), frame='icrs')
+            ebv = SFDQuery()(coords)
+            self.Av = float(ebv) * 2.742
+        except Exception:
+            self.Av = None
+
     # ── Helpers ──────────────────────────────────────────────────
 
     def _add_mag(self, pyphot_name, mag, err):
@@ -1303,36 +1324,52 @@ class Librarian:
             self._magnitudes[pyphot_name] = (mag, err)
 
     def _print_summary(self):
-        tab = "\t\t\t\t"
-        print(f"{tab}--- Retrieved Photometry ---")
-        print(f"{tab}{'Filter':20s}  {'Magnitude':>10s}  {'Error':>8s}")
-        print(f"{tab}{'-' * 42}")
-        for band, (mag, err) in sorted(self._magnitudes.items()):
-            print(f"{tab}{band:20s}  {mag:10.4f}  {err:8.4f}")
-        if self._parallax is not None:
-            print(
-                f"{tab}Parallax : {self._parallax:.3f} "
-                f"+/- {self._parallax_e:.3f} mas"
-            )
-        if self._teff is not None:
-            t_str = f"{self._teff:.0f}"
-            if self._teff_e:
-                t_str += f" +/- {self._teff_e:.0f}"
-            print(f"{tab}Gaia Teff : {t_str} K")
-        if self._distance is not None:
-            print(
-                f"{tab}BJ Distance : {self._distance:.1f} "
-                f"+/- {self._distance_e:.1f} pc"
-            )
-        if self._spectroscopic_params:
-            sp = self._spectroscopic_params
-            src = sp.get("source", "unknown")
-            print(f"{tab}Spectroscopic source : {src}")
-            print(f"{tab}{src} Teff : {sp['teff']:.0f} +/- {sp['teff_err']:.0f} K")
-            print(f"{tab}{src} logg : {sp['logg']:.2f} +/- {sp['logg_err']:.2f}")
-            print(f"{tab}{src} [Fe/H] : {sp['feh']:.2f} +/- {sp['feh_err']:.2f}")
+        import random
+        from termcolor import colored
+        from lachesis.filters import FILTER_WAVELENGTH
+        c = random.choice(['red', 'green', 'blue', 'yellow', 'grey', 'magenta', 'cyan', 'white'])
+        t2 = "\t\t"
+        t3 = "\t\t\t"
+
+        # Photometry table sorted by wavelength (like ARIADNE)
+        bands = sorted(
+            self._magnitudes.keys(),
+            key=lambda b: FILTER_WAVELENGTH.get(b, 99.0),
+        )
+        print(colored(f"{t2}--- Retrieved photometry ---", c))
+        print(colored(f"{t2}{' Filter':^20s}\t{'Magnitude':>9s}\t{'Uncertainty':>11s}", c))
+        print(colored(f"{t2}{'':->20s}\t{'-':->9s}\t{'-':->11s}", c))
+        for band in bands:
+            mag, err = self._magnitudes[band]
+            print(colored(f"{t2}{band:^20s}\t{mag: ^9.4f}\t{err: ^11.4f}", c))
+
+        # Stellar params — new color (matching ARIADNE's display_star_fin)
+        c = random.choice(['red', 'green', 'blue', 'yellow', 'grey', 'magenta', 'cyan', 'white'])
         if self._gaia_id:
-            print(f"{tab}Gaia DR3 ID : {self._gaia_id}")
+            print(colored(f"{t3}Gaia DR3 ID : {self._gaia_id}", c))
+        if self._tic_id:
+            print(colored(f"{t3}TIC : {self._tic_id}", c))
+        if self._kic_id:
+            print(colored(f"{t3}KIC : {self._kic_id}", c))
+        if self._teff is not None:
+            print(colored(f"{t3}Gaia Effective temperature : ", c), end='')
+            print(colored(f"{self._teff:.3f} +/- {self._teff_e:.3f}", c))
+        if self._radius_flame is not None:
+            print(colored(f"{t3}Gaia Stellar radius : ", c), end='')
+            print(colored(f"{self._radius_flame:.3f} +/- {self._radius_flame_e:.3f}", c))
+        if self._luminosity is not None:
+            print(colored(f"{t3}Gaia Stellar Luminosity : ", c), end='')
+            print(colored(f"{self._luminosity:.3f} +/- {self._luminosity_e:.3f}", c))
+        if self._parallax is not None:
+            print(colored(f"{t3}Gaia Parallax : ", c), end='')
+            print(colored(f"{self._parallax:.3f} +/- {self._parallax_e:.3f}", c))
+        if self._distance is not None:
+            print(colored(f"{t3}Bailer-Jones distance : ", c), end='')
+            print(colored(f"{self._distance:.3f} +/- {self._distance_e:.3f}", c))
+        if hasattr(self, 'Av') and self.Av is not None:
+            print(colored(f"{t3}Maximum Av : ", c), end='')
+            print(colored(f"{self.Av:.3f}", c))
+        print()
         print()
 
     # ── Properties ───────────────────────────────────────────────
@@ -1417,33 +1454,3 @@ class Librarian:
             return dict(self._spectroscopic_params)
         return None
 
-    def to_star(self, starname: str, **kwargs):
-        """Convert to a Star object for isochrone fitting.
-
-        Passes through all retrieved parameters. User kwargs override.
-        """
-        from lachesis.star import Star
-
-        star_kwargs: dict = {}
-
-        if self._parallax is not None:
-            star_kwargs["parallax"] = self._parallax
-            star_kwargs["parallax_e"] = self._parallax_e
-        if self._distance is not None:
-            star_kwargs["distance"] = self._distance
-            star_kwargs["distance_e"] = self._distance_e
-        # GSP-Phot Teff, FLAME radius/luminosity are NOT passed to the Star.
-        # They're Gaia pipeline estimates with unrealistically small formal
-        # errors that would over-constrain the fit. The photometry + parallax
-        # constrain Teff/L/R properly through the isochrone model.
-        # Available via Librarian's .teff / .radius / .luminosity properties.
-        if self._spectroscopic_params:
-            star_kwargs.setdefault("logg", self._spectroscopic_params["logg"])
-            star_kwargs.setdefault("logg_e", self._spectroscopic_params["logg_err"])
-            star_kwargs.setdefault("feh", self._spectroscopic_params["feh"])
-            star_kwargs.setdefault("feh_e", self._spectroscopic_params["feh_err"])
-
-        star_kwargs["magnitudes"] = self.magnitudes
-        star_kwargs.update(kwargs)
-
-        return Star(starname, **star_kwargs)
