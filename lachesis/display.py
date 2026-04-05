@@ -1,83 +1,121 @@
 """Console display functions — matching ARIADNE's output style."""
 
+import random
 import time
 
 import numpy as np
+from termcolor import colored
 
 from lachesis.config import EEP_PHASES
 
-_TAB = "\t\t\t\t"
+_COLORS = ['red', 'green', 'blue', 'yellow', 'grey', 'magenta', 'cyan', 'white']
+_T2 = "\t\t"      # section headers (banner box, routine header)
+_T3 = "\t\t\t"    # detail lines (author, params)
 
 
-def display_banner(starname: str):
-    print(f"{_TAB}#####################################")
-    print(f"{_TAB}##            LACHESIS             ##")
-    print(f"{_TAB}#####################################")
-    print(f"   isochrone bAyesian modeL avEraging")
-    print(f"   CHaracterization of stEllar age, maSs")
-    print(f"   and evolutIonary State")
-    print()
-    print(f"{_TAB}Author : Jose Vines")
-    print(f"{_TAB}Star : {starname}")
-    print()
+def _pick_color():
+    return random.choice(_COLORS)
 
 
-def display_star_info(star):
-    print(f"{_TAB}--- Input Stellar Properties ---")
-    props = [
-        ("Teff", star.teff, star.teff_e, "K"),
-        ("log(g)", star.logg, star.logg_e, "dex"),
-        ("[Fe/H]", star.feh, star.feh_e, "dex"),
-        ("Luminosity", star.luminosity, star.luminosity_e, "Lsun"),
-        ("Radius", star.radius, star.radius_e, "Rsun"),
-        ("Distance", star.distance, star.distance_e, "pc"),
-        ("Parallax", star.parallax, star.parallax_e, "mas"),
-    ]
-    for name, val, err, unit in props:
-        if val is not None:
-            if err is not None:
-                print(f"{_TAB}{name:15s}:  {val:.4g} +/- {err:.4g} {unit}")
-            else:
-                print(f"{_TAB}{name:15s}:  {val:.4g} {unit}")
+def display_retrieved_photometry(star, c=None):
+    """Print retrieved photometry table + Gaia params (before banner)."""
+    if c is None:
+        c = _pick_color()
+
+    # Photometry table
     if star.magnitudes:
-        print(f"{_TAB}{'Magnitudes':15s}:  {len(star.magnitudes)} bands")
-    print(f"{_TAB}{'Mode':15s}:  {star.mode}")
+        print(colored(f'{_T3}--- Retrieved Photometry ---', c))
+        print(colored(f'{_T3}{"Filter":23s}{"Magnitude":>14s}{"Error":>10s}', c))
+        print(colored(f'{_T3}{"-" * 42}', c))
+        for filt in sorted(star.magnitudes.keys()):
+            mag, err = star.magnitudes[filt]
+            print(colored(f'{_T3}{filt:23s}{mag:14.4f}{err:10.4f}', c))
+
+    # Gaia params
+    if star.parallax is not None:
+        print(colored(
+            f'{_T3}Parallax : {star.parallax:.3f} +/- {star.parallax_e:.3f} mas', c))
+    if star.teff is not None:
+        print(colored(
+            f'{_T3}Gaia Teff : {star.teff:.0f} +/- {star.teff_e:.0f} K', c))
+    if star.distance is not None:
+        print(colored(
+            f'{_T3}BJ Distance : {star.distance:.1f} +/- {star.distance_e:.1f} pc', c))
+    if star.g_id is not None:
+        print(colored(f'{_T3}Gaia DR3 ID : {star.g_id}', c))
+    if star.Av is not None:
+        print(colored(f'{_T3}Maximum Av : {star.Av:.3f}', c))
     print()
+    return c
+
+
+def display_banner(starname: str, c=None):
+    if c is None:
+        c = _pick_color()
+    print(colored(f'\n{_T2}#####################################', c))
+    print(colored(f'{_T2}##            LACHESIS             ##', c))
+    print(colored(f'{_T2}#####################################', c))
+    print(colored('   modeL Averaging for isoChrone', c), end=' ')
+    print(colored('cHaractErization of Stellar propertIeS', c))
+    print()
+    print(colored(f'{_T3}Author : Jose Vines', c))
+    print(colored(f'{_T3}Contact : jose . vines at ug . uchile . cl', c))
+    print(colored(f'{_T3}Star : {starname}', c))
+    return c
+
+
+def display_star_info(star, c=None):
+    """Print stellar info after photometry — matching ARIADNE's display_star_fin."""
+    if c is None:
+        c = _pick_color()
+    # This block intentionally left empty — all stellar info is now printed
+    # by the Librarian's _print_summary (after the photometry table),
+    # matching ARIADNE's display_star_fin placement.
+    pass
 
 
 def display_routine(fitter):
+    c = _pick_color()
     setup = fitter._parsed_setup
-    print(f"{_TAB}*** EXECUTING ISOCHRONE FITTING ROUTINE ***")
-    print(f"{_TAB}Selected engine : {setup['engine']}")
-    print(f"{_TAB}Live points : {setup['nlive']}")
-    print(f"{_TAB}log Evidence tolerance : {setup['dlogz']}")
-    print(f"{_TAB}Bounding : {setup['bound']}")
-    print(f"{_TAB}Sampling : {setup['sample']}")
-    print(f"{_TAB}N threads : {setup['threads']}")
-    print(f"{_TAB}Mode : {fitter.star.mode}")
-    print(f"{_TAB}Grids : {', '.join(g.upper() for g in fitter.grids)}")
-    print(f"{_TAB}BMA : {fitter.bma}")
-    if fitter.binary:
-        print(f"{_TAB}Binary : True")
+    if fitter.bma:
+        engine = 'Bayesian Model Averaging'
+    else:
+        grid = fitter.grids[0].upper() if fitter.grids else '?'
+        engine = f'Single model ({grid})'
+    print(colored(f'\n{_T2}*** EXECUTING ISOCHRONE FITTING ROUTINE ***', c))
+    print(colored(f'{_T3}Selected engine : ', c), end='')
+    print(colored(engine, c))
+    print(colored(f'{_T3}Live points : ', c), end='')
+    print(colored(str(setup["nlive"]), c))
+    print(colored(f'{_T3}log Evidence tolerance : ', c), end='')
+    print(colored(str(setup["dlogz"]), c))
+    print(colored(f'{_T3}Bounding : ', c), end='')
+    print(colored(setup["bound"], c))
+    print(colored(f'{_T3}Sampling : ', c), end='')
+    print(colored(setup["sample"], c))
+    print(colored(f'{_T3}N threads : ', c), end='')
+    print(colored(str(setup["threads"]), c))
     print()
 
 
 def display_fitting_grid(name: str):
-    print(f"{_TAB}FITTING GRID : {name.upper()}")
+    c = _pick_color()
+    print(colored(f'{_T3}FITTING GRID : {name.upper()}', c))
 
 
 def display_summary(samples, derived, param_names):
-    """Print parameter summary table with median, 1σ, 3σ."""
+    """Print parameter summary table with median, 1 sigma, 3 sigma."""
+    c = _pick_color()
     print()
-    print(f"{_TAB}Fitting finished.")
-    print(f"{_TAB}Best fit parameters are:")
+    print(colored(f'{_T3}Fitting finished.', c))
+    print(colored(f'{_T3}Best fit parameters are:', c))
     print()
 
-    # Derived quantities to display
     display_params = [
         ("Age (Gyr)", 10.0 ** samples[:, param_names.index("log_age")] / 1e9
          if "log_age" in param_names else None),
-        ("Initial mass (Msun)", derived.get("initial_mass")),
+        # Current stellar mass (after mass loss), not ZAMS mass.
+        ("Mass (Msun)", derived.get("star_mass", derived.get("mass"))),
         ("EEP", samples[:, param_names.index("eep")]
          if "eep" in param_names else None),
         ("Teff (K)", derived.get("Teff")),
@@ -88,7 +126,6 @@ def display_summary(samples, derived, param_names):
         ("Luminosity (Lsun)", _safe_pow10(derived.get("log_L"))),
     ]
 
-    # Add distance/Av if present
     if "distance" in param_names:
         idx = param_names.index("distance")
         display_params.append(("Distance (pc)", samples[:, idx]))
@@ -96,9 +133,9 @@ def display_summary(samples, derived, param_names):
         idx = param_names.index("av")
         display_params.append(("Av (mag)", samples[:, idx]))
 
-    fmt = f"{_TAB}{{:20s}}  {{:>10s}}  {{:>20s}}  {{:>20s}}"
-    print(fmt.format("Parameter", "Median", "1σ CI", "3σ CI"))
-    print(f"{_TAB}{'-' * 74}")
+    fmt = f"{_T3}{{:20s}}  {{:>10s}}  {{:>20s}}  {{:>20s}}"
+    print(colored(fmt.format("Parameter", "Median", "1\u03c3 CI", "3\u03c3 CI"), c))
+    print(colored(f"{_T3}{'-' * 74}", c))
 
     for name, arr in display_params:
         if arr is None:
@@ -111,39 +148,43 @@ def display_summary(samples, derived, param_names):
         hi1 = np.percentile(arr, 84.13) - med
         lo3 = np.percentile(arr, 0.13)
         hi3 = np.percentile(arr, 99.87)
-        print(fmt.format(
+        print(colored(fmt.format(
             name,
             f"{med:.4g}",
             f"+{hi1:.4g}  -{lo1:.4g}",
             f"[{lo3:.4g}, {hi3:.4g}]",
-        ))
+        ), c))
 
-    # Evolutionary state from median EEP
     if "eep" in param_names:
         med_eep = np.median(samples[:, param_names.index("eep")])
         state = _eep_to_state(med_eep)
-        print(f"{_TAB}{'Evol. state':20s}  {state}")
+        print(colored(f"{_T3}{'Evol. state':20s}  {state}", c))
 
     print()
 
 
 def display_model_weights(bma_result):
-    print(f"{_TAB}Model weights:")
+    c = _pick_color()
+    print(colored(f'{_T3}Model weights:', c))
+    print(colored(f'{_T3}{"Grid":25s}{"Probability":>14s}{"log(Z)":>14s}', c))
+    print(colored(f'{_T3}{"-" * 53}', c))
     for name, w, lz in zip(
         bma_result.model_names, bma_result.weights, bma_result.log_evidences
     ):
-        print(f"{_TAB}{name} probability : {w:.4f}  (logZ = {lz:.3f})")
+        print(colored(f'{_T3}{name:25s}{w:14.4f}{lz:14.3f}', c))
     print()
 
 
 def display_elapsed(t_start):
+    c = _pick_color()
     elapsed = time.time() - t_start
     minutes = int(elapsed // 60)
     seconds = elapsed % 60
     if minutes > 0:
-        print(f"{_TAB}Elapsed time : {minutes} minutes and {seconds:.2f} seconds")
+        print(colored(
+            f'{_T3}Elapsed time : {minutes} minutes and {seconds:.2f} seconds', c))
     else:
-        print(f"{_TAB}Elapsed time : {seconds:.2f} seconds")
+        print(colored(f'{_T3}Elapsed time : {seconds:.2f} seconds', c))
     print()
 
 

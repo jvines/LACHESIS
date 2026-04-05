@@ -20,6 +20,8 @@ dependencies = [
     "numba",
     "arviz",
     "h5netcdf",
+    "termcolor",
+    "dustmaps>=1.0.14",
 ]
 
 [project.optional-dependencies]

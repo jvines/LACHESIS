@@ -68,6 +68,32 @@ PYPHOT_TO_BC = {
 # Reverse mapping: BC table name → pyphot name
 BC_TO_PYPHOT = {v: k for k, v in PYPHOT_TO_BC.items()}
 
+# Effective wavelengths in microns (for display ordering)
+FILTER_WAVELENGTH = {
+    "GALEX_FUV": 0.154, "GALEX_NUV": 0.231,
+    "STROMGREN_u": 0.350, "SkyMapper_u": 0.350,
+    "GROUND_JOHNSON_U": 0.360,
+    "STROMGREN_v": 0.411, "SkyMapper_v": 0.383,
+    "GROUND_JOHNSON_B": 0.438, "TYCHO_B_MvB": 0.420,
+    "SDSS_u": 0.355, "SDSS_g": 0.477,
+    "STROMGREN_b": 0.467, "SkyMapper_g": 0.508,
+    "PS1_g": 0.487, "GaiaDR2v2_BP": 0.532, "Gaia_BP": 0.511,
+    "GROUND_JOHNSON_V": 0.545, "TYCHO_V_MvB": 0.532,
+    "STROMGREN_y": 0.547,
+    "SDSS_r": 0.623, "PS1_r": 0.622, "SkyMapper_r": 0.616,
+    "GaiaDR2v2_G": 0.673, "Gaia_G": 0.622,
+    "GROUND_COUSINS_R": 0.641,
+    "SDSS_i": 0.763, "PS1_i": 0.755, "SkyMapper_i": 0.777,
+    "GaiaDR2v2_RP": 0.797, "Gaia_RP": 0.777,
+    "GROUND_COUSINS_I": 0.798,
+    "SDSS_z": 0.913, "PS1_z": 0.868, "SkyMapper_z": 0.916,
+    "PS1_y": 0.963,
+    "TESS": 0.800, "KEPLER_Kp": 0.640,
+    "2MASS_J": 1.235, "2MASS_H": 1.662, "2MASS_Ks": 2.159,
+    "WISE_RSR_W1": 3.353, "WISE_RSR_W2": 4.603,
+    "SPITZER_IRAC_36": 3.550, "SPITZER_IRAC_45": 4.493,
+}
+
 # Catalog column → pyphot filter name (for external code; the Librarian
 # uses its own CatalogDef registry for this mapping).
 CATALOG_TO_PYPHOT = {
