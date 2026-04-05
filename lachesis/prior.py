@@ -50,7 +50,7 @@ class IsochonePrior:
         age_range: tuple[float, float],
         feh_range: tuple[float, float],
         feh_prior: tuple[str, ...] | None = None,
-        distance_range: tuple[float, float] | None = None,
+        distance_prior: tuple[str, ...] | None = None,
         av_range: tuple[float, float] | None = None,
         vini_range: tuple[float, float] | None = None,
         binary: bool = False,
@@ -69,16 +69,46 @@ class IsochonePrior:
             if self._feh_type == "gaussian":
                 self._feh_mean = feh_prior[1]
                 self._feh_sigma = feh_prior[2]
+            elif self._feh_type == "kde":
+                # feh_prior = ("kde", samples_array)
+                samples = np.asarray(feh_prior[1])
+                self._build_feh_kde(samples)
 
-        self._has_distance = distance_range is not None
+        self._has_distance = distance_prior is not None
         self._has_av = av_range is not None
         self._has_vini = vini_range is not None
         if self._has_distance:
-            self.dist_lo, self.dist_hi = distance_range
+            # ("normal", mean, sigma) — truncated normal at 0, like ARIADNE
+            self._dist_type = distance_prior[0]
+            self._dist_mean = distance_prior[1]
+            self._dist_sigma = distance_prior[2]
+            # Sampling range: mean ± 10σ, truncated at 0
+            self.dist_lo = max(0.1, self._dist_mean - 10 * self._dist_sigma)
+            self.dist_hi = self._dist_mean + 10 * self._dist_sigma
         if self._has_av:
             self.av_lo, self.av_hi = av_range
         if self._has_vini:
             self.vini_lo, self.vini_hi = vini_range
+
+    def _build_feh_kde(self, samples):
+        """Build KDE + inverse CDF for sampling from an arbitrary distribution."""
+        from scipy.stats import gaussian_kde
+        # Clip samples to the feh prior range so the inverse CDF is bounded
+        samples = samples[(samples >= self.feh_lo) & (samples <= self.feh_hi)]
+        if len(samples) < 10:
+            # Too few samples, fall back to uniform
+            self._feh_type = "uniform"
+            return
+        self._feh_kde = gaussian_kde(samples)
+        # Build inverse CDF on a fine grid for prior_transform
+        grid = np.linspace(self.feh_lo, self.feh_hi, 1024)
+        pdf = self._feh_kde(grid)
+        cdf = np.cumsum(pdf)
+        cdf = cdf / cdf[-1]
+        # Remove duplicates for strict monotonicity
+        mask = np.concatenate([[True], np.diff(cdf) > 0])
+        self._feh_cdf_x = grid[mask]
+        self._feh_cdf_y = cdf[mask]
 
     @property
     def param_names(self) -> list[str]:
@@ -107,6 +137,9 @@ class IsochonePrior:
             from scipy.special import ndtri
             theta[2] = self._feh_mean + self._feh_sigma * ndtri(u[2])
             theta[2] = np.clip(theta[2], self.feh_lo, self.feh_hi)
+        elif self._feh_type == "kde":
+            # Inverse CDF sampling from the ARIADNE posterior KDE
+            theta[2] = np.interp(u[2], self._feh_cdf_y, self._feh_cdf_x)
         else:
             theta[2] = self.feh_lo + u[2] * (self.feh_hi - self.feh_lo)
 
@@ -115,7 +148,9 @@ class IsochonePrior:
             theta[idx] = self.eep_lo + u[idx] * (theta[0] - self.eep_lo)
             idx += 1
         if self._has_distance:
-            theta[idx] = self.dist_lo + u[idx] * (self.dist_hi - self.dist_lo)
+            from scipy.special import ndtri
+            theta[idx] = self._dist_mean + self._dist_sigma * ndtri(u[idx])
+            theta[idx] = np.clip(theta[idx], self.dist_lo, self.dist_hi)
             idx += 1
         if self._has_av:
             theta[idx] = self.av_lo + u[idx] * (self.av_hi - self.av_lo)
@@ -200,12 +235,21 @@ class IsochonePrior:
                 - np.log(self._feh_sigma)
                 - 0.5 * np.log(2 * np.pi)
             )
+        elif self._feh_type == "kde":
+            pdf = float(self._feh_kde(feh)[0])
+            if pdf <= 0:
+                return -np.inf
+            lnp += np.log(pdf)
         else:
             lnp += -np.log(self.feh_hi - self.feh_lo)
 
-        # Distance prior (uniform for now)
+        # Distance prior (truncated normal, like ARIADNE)
         if self._has_distance:
-            lnp += -np.log(self.dist_hi - self.dist_lo)
+            lnp += (
+                -0.5 * ((distance - self._dist_mean) / self._dist_sigma) ** 2
+                - np.log(self._dist_sigma)
+                - 0.5 * np.log(2 * np.pi)
+            )
         # Av prior (uniform)
         if self._has_av:
             lnp += -np.log(self.av_hi - self.av_lo)

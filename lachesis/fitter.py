@@ -77,6 +77,7 @@ class Fitter:
         self._out_folder = None
         self._setup = ["dynesty"]
         self._prior_setup = None
+        self._av_law = "fitzpatrick"
         self._eep_range = (200, 808)
         self._age_range = (8.0, 10.3)
         self._feh_range = (-2.0, 0.5)
@@ -197,6 +198,17 @@ class Fitter:
     def bc_system(self, system: str | None):
         self._bc_system = system
 
+    @property
+    def av_law(self) -> str:
+        return self._av_law
+
+    @av_law.setter
+    def av_law(self, law: str):
+        valid = {"fitzpatrick", "cardelli", "odonnell", "calzetti"}
+        if law.lower() not in valid:
+            raise InputError(f"Unknown Av law '{law}'. Available: {sorted(valid)}")
+        self._av_law = law.lower()
+
     # --- Methods ---
 
     def initialize(self):
@@ -224,47 +236,78 @@ class Fitter:
 
         # Load grids
         for name in self._grids:
-            if self._verbose:
-                print(f"\t\t\t\tLoading grid : {name.upper()}")
             self._grid_objects[name] = _load_grid(name)
             self._interpolators[name] = make_interpolator(self._grid_objects[name])
 
-        # Load BC table if photometric mode
-        if self._bc_system or self._star.mode == "photometric":
-            from lachesis.bc import BCTable
-            from lachesis.config import BC_DIR
-            bc_dir = BC_DIR
-            if self._bc_system:
-                # Explicit single system requested
-                self._bc_table = BCTable(bc_dir, system=self._bc_system)
-            else:
-                # Load all available systems (WISE, SDSS, PanSTARRS, etc.)
-                self._bc_table = BCTable.multi_system(bc_dir)
-            # Restrict BC to only the bands the star actually uses
-            used_bands = [
-                k for k in self._star.observed
-                if k in self._bc_table._band_indices
-            ]
-            if used_bands:
-                self._bc_table.set_active_bands(used_bands)
+        # Load BC tables
+        from lachesis.bc import BCTable
+        from lachesis.config import BC_DIR
+        if self._bc_system:
+            self._bc_table = BCTable(BC_DIR, system=self._bc_system)
+        else:
+            self._bc_table = BCTable.multi_system(BC_DIR)
+        # Restrict BC to only the bands the star actually uses
+        used_bands = [
+            k for k in self._star.observed
+            if k in self._bc_table._band_indices
+        ]
+        if used_bands:
+            self._bc_table.set_active_bands(used_bands)
 
-        # Parse priors
+        # Parse priors (matching ARIADNE's prior_setup dict pattern)
+        ps = self._prior_setup or {}
+
+        # [Fe/H] prior priority:
+        #   1. User override in prior_setup (normal)
+        #   2. Full ARIADNE posterior samples (KDE) — preserves shape
+        #   3. Spectroscopic prior from star.feh/feh_e (gaussian)
+        #   4. Uniform (default)
         feh_prior = None
-        distance_range = None
-        av_range = None
-        if self._prior_setup:
-            feh_cfg = self._prior_setup.get("feh")
-            if feh_cfg and feh_cfg[0] == "normal":
-                feh_prior = feh_cfg
-        if self._star.mode == "photometric" or self._bc_system:
-            # Use parallax-derived distance as tight range if available
-            if self._star.distance is not None and self._star.distance_e is not None:
-                d = self._star.distance
-                d_e = self._star.distance_e
-                distance_range = (max(0.1, d - 5 * d_e), d + 5 * d_e)
-            else:
-                distance_range = (1.0, 10000.0)
+        feh_cfg = ps.get("feh") or ps.get("z")
+        if feh_cfg and isinstance(feh_cfg, tuple) and feh_cfg[0] == "normal":
+            feh_prior = ("gaussian", feh_cfg[1], feh_cfg[2])
+        elif getattr(self._star, "feh_posterior", None) is not None:
+            feh_prior = ("kde", self._star.feh_posterior)
+        elif self._star.feh is not None and self._star.feh_e is not None:
+            feh_prior = ("gaussian", self._star.feh, self._star.feh_e)
+
+        # Distance prior: truncated normal from BJ distance (like ARIADNE)
+        dist_cfg = ps.get("dist")
+        if dist_cfg and isinstance(dist_cfg, tuple) and dist_cfg[0] == "normal":
+            distance_prior = ("normal", dist_cfg[1], dist_cfg[2])
+        elif self._star.distance is not None and self._star.distance_e is not None:
+            distance_prior = (
+                "normal", self._star.distance, 3 * self._star.distance_e
+            )
+        else:
+            distance_prior = ("normal", 500.0, 5000.0)
+
+        # Av prior
+        av_cfg = ps.get("Av")
+        if av_cfg and isinstance(av_cfg, tuple) and av_cfg[0] == "fixed":
+            av_range = (av_cfg[1], av_cfg[1])
+        elif av_cfg and isinstance(av_cfg, tuple) and av_cfg[0] == "uniform":
+            av_range = (av_cfg[1], av_cfg[2])
+        else:
             av_range = (0.0, self._star.Av or 1.0)
+
+        # Build KDE-based external priors from ARIADNE posteriors.
+        # Pre-tabulate log(pdf) on a fine grid and interpolate with np.interp
+        # at evaluation time — O(1) per call instead of O(N_samples).
+        external_kdes = {}
+        if self._star.external_posteriors:
+            from scipy.stats import gaussian_kde
+            for param, samples in self._star.external_posteriors.items():
+                if len(samples) < 10:
+                    continue
+                kde = gaussian_kde(samples)
+                lo, hi = float(samples.min()), float(samples.max())
+                pad = 0.1 * (hi - lo)
+                grid = np.linspace(lo - pad, hi + pad, 2048)
+                log_pdf = np.log(np.maximum(kde(grid), 1e-300))
+                external_kdes[param] = (grid, log_pdf)
+            if self._verbose and external_kdes:
+                print(f"\t\t\t External priors (KDE): {', '.join(external_kdes)}")
 
         # Build IsochroneFitter per grid
         for name in self._grids:
@@ -291,10 +334,11 @@ class Fitter:
                 feh_range=(grid_feh_lo, grid_feh_hi),
                 feh_prior=feh_prior,
                 bc_table=self._bc_table,
-                distance_range=distance_range,
+                distance_prior=distance_prior,
                 av_range=av_range,
                 vini_range=vini_range,
                 binary=self._binary,
+                external_kdes=external_kdes,
             )
 
         self._initialized = True
@@ -304,28 +348,35 @@ class Fitter:
 
     def show_priors(self):
         """Display prior configuration."""
+        import random
+        from termcolor import colored
         if not self._initialized:
             raise InputError("Call initialize() first.")
+        c = random.choice(['red', 'green', 'blue', 'yellow', 'grey', 'magenta', 'cyan', 'white'])
+        t3 = "\t\t\t"
         fitter = next(iter(self._fitters.values()))
         p = fitter.prior
-        print(f"\t\t\t\t{'Parameter':12s}  Prior")
-        print(f"\t\t\t\t{'-' * 40}")
+        print(colored(f"{t3}{'Parameter':12s}  Prior", c))
+        print(colored(f"{t3}{'-' * 40}", c))
         for name in p.param_names:
             if name == "eep":
-                print(f"\t\t\t\t{'eep':12s}  U({p.eep_lo:.0f}, {p.eep_hi:.0f})")
+                print(colored(f"{t3}{'eep':12s}  U({p.eep_lo:.0f}, {p.eep_hi:.0f})", c))
             elif name == "log_age":
-                print(f"\t\t\t\t{'log_age':12s}  U({p.age_lo:.2f}, {p.age_hi:.2f})")
+                print(colored(f"{t3}{'log_age':12s}  U({p.age_lo:.2f}, {p.age_hi:.2f})", c))
             elif name == "feh":
                 if p._feh_type == "gaussian":
-                    print(f"\t\t\t\t{'feh':12s}  N({p._feh_mean:.3f}, {p._feh_sigma:.3f})")
+                    print(colored(f"{t3}{'feh':12s}  N({p._feh_mean:.3f}, {p._feh_sigma:.3f})", c))
+                elif p._feh_type == "kde":
+                    n = len(p._feh_cdf_x)
+                    print(colored(f"{t3}{'feh':12s}  KDE (ARIADNE posterior, {n} grid pts)", c))
                 else:
-                    print(f"\t\t\t\t{'feh':12s}  U({p.feh_lo:.2f}, {p.feh_hi:.2f})")
+                    print(colored(f"{t3}{'feh':12s}  U({p.feh_lo:.2f}, {p.feh_hi:.2f})", c))
             elif name == "distance":
-                print(f"\t\t\t\t{'distance':12s}  U({p.dist_lo:.0f}, {p.dist_hi:.0f})")
+                print(colored(f"{t3}{'distance':12s}  N({p._dist_mean:.3f}, {p._dist_sigma:.3f})", c))
             elif name == "av":
-                print(f"\t\t\t\t{'av':12s}  U({p.av_lo:.2f}, {p.av_hi:.2f})")
+                print(colored(f"{t3}{'av':12s}  U({p.av_lo:.2f}, {p.av_hi:.2f})", c))
             elif name == "eep_secondary":
-                print(f"\t\t\t\t{'eep_2nd':12s}  U({p.eep_lo:.0f}, eep_primary)")
+                print(colored(f"{t3}{'eep_2nd':12s}  U({p.eep_lo:.0f}, eep_primary)", c))
         print()
 
     def fit(self):
@@ -415,6 +466,7 @@ class Fitter:
             observed=self._star.observed,
             uncertainties=self._star.uncertainties,
             grid_name=grid_name,
+            star=self._star,
         )
         idata.to_netcdf(nc_path)
         save_summary_dat(dat_path, result)
@@ -434,6 +486,7 @@ class Fitter:
             observed=self._star.observed,
             uncertainties=self._star.uncertainties,
             grid_name="BMA",
+            star=self._star,
         )
         idata.to_netcdf(nc_path)
         save_summary_dat(dat_path, {

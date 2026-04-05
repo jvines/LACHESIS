@@ -29,22 +29,24 @@ class IsochroneFitter:
         feh_range: tuple[float, float],
         feh_prior: tuple[str, ...] | None = None,
         bc_table=None,
-        distance_range: tuple[float, float] | None = None,
+        distance_prior: tuple[float, float] | None = None,
         av_range: tuple[float, float] | None = None,
         vini_range: tuple[float, float] | None = None,
         binary: bool = False,
         imf: str = "chabrier",
+        external_kdes: dict | None = None,
     ):
         self.interp = interp
         self.bc_table = bc_table
         self._binary = binary
         self._has_vini = vini_range is not None
+        self._external_kdes = external_kdes or {}
         self.prior = IsochonePrior(
             eep_range=eep_range,
             age_range=age_range,
             feh_range=feh_range,
             feh_prior=feh_prior,
-            distance_range=distance_range,
+            distance_prior=distance_prior,
             av_range=av_range,
             vini_range=vini_range,
             binary=binary,
@@ -70,6 +72,7 @@ class IsochroneFitter:
         unc = uncertainties
         is_binary = self._binary
         param_names = prior.param_names
+        ext_kdes = self._external_kdes
 
         def loglike(theta):
             params = dict(zip(param_names, theta))
@@ -91,6 +94,25 @@ class IsochroneFitter:
             lnp_eep = prior.log_eep_prior(initial_mass, dm_deep)
             if not np.isfinite(lnp_eep):
                 return -np.inf
+
+            # External priors from ARIADNE posteriors.
+            # ext_kdes stores (grid, log_pdf) tables for O(1) interp lookup.
+            lnp_ext = 0.0
+            if ext_kdes:
+                for param, (grid_x, log_pdf) in ext_kdes.items():
+                    if param == "Teff":
+                        val = predicted.get("Teff")
+                    elif param == "log_g":
+                        val = predicted.get("log_g")
+                    elif param == "radius":
+                        val = predicted.get("radius")
+                    else:
+                        continue
+                    if val is None or np.isnan(val):
+                        return -np.inf
+                    if val < grid_x[0] or val > grid_x[-1]:
+                        return -np.inf
+                    lnp_ext += float(np.interp(val, grid_x, log_pdf))
 
             # Data likelihood (pass predicted to avoid double interpolation)
             if is_binary:
@@ -114,7 +136,7 @@ class IsochroneFitter:
             if not np.isfinite(lnl):
                 return -np.inf
 
-            return lnl + lnp_eep
+            return lnl + lnp_eep + lnp_ext
 
         dynesty_kwargs.setdefault("sample", "rwalk")
         sampler = dynesty.NestedSampler(
@@ -124,7 +146,7 @@ class IsochroneFitter:
             nlive=nlive,
             **dynesty_kwargs,
         )
-        sampler.run_nested(dlogz=dlogz, print_progress=False)
+        sampler.run_nested(dlogz=dlogz, print_progress=True)
         results = sampler.results
 
         weights = np.exp(results.logwt - results.logz[-1])
