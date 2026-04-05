@@ -8,7 +8,7 @@ Style matches astroARIADNE conventions (fontname=serif, fontsize=26,
 tick_labelsize=22, gaussian_kde overlays, LineCollection HR tracks).
 """
 
-__all__ = ["IsoPlotter"]
+__all__ = ["ISOPlotter"]
 
 import warnings
 from pathlib import Path
@@ -32,18 +32,28 @@ _MODEL_COLORS = [
     "tab:purple", "tab:brown",
 ]
 
-# Default parameters for corner / to_latex
+# Default parameters for corner / to_latex.
+# Note: we report the *current* stellar mass (`mass`, which comes from the
+# grid's `star_mass` column), not `initial_mass`. For main-sequence stars
+# they're nearly identical, but for evolved stars (RGB/AGB) they differ due
+# to mass loss, and the current mass is what astronomers want reported.
 _DEFAULT_CORNER_PARAMS = [
-    "initial_mass", "Teff", "log_g", "[Fe/H]", "age_gyr",
+    "mass", "Teff", "log_g", "[Fe/H]", "age_gyr",
+]
+
+# Histograms show every sampled parameter + useful derived ones
+_DEFAULT_HIST_PARAMS = [
+    "mass", "Teff", "log_g", "[Fe/H]", "age_gyr",
+    "distance", "Av", "eep",
 ]
 
 _DEFAULT_LATEX_PARAMS = [
-    "initial_mass", "Teff", "log_g", "[Fe/H]", "age_gyr",
-    "distance", "Av",
+    "mass", "age_gyr", "[Fe/H]", "log_g",
 ]
 
 # LaTeX-formatted axis labels
 _PARAM_LABELS = {
+    "mass": r"$M_\star$ [$M_\odot$]",
     "initial_mass": r"$M_{\mathrm{init}}$ [$M_\odot$]",
     "Teff": r"$T_{\mathrm{eff}}$ [K]",
     "log_g": r"$\log g$ [dex]",
@@ -73,25 +83,8 @@ def _is_bma(result):
     return isinstance(result, BMAResult)
 
 
-def _extract_param(result, name):
-    """Extract a named parameter array from a result dict or BMAResult.
-
-    Handles special cases:
-      age_gyr  -> 10**(log_age) / 1e9
-      [Fe/H]   -> samples column 2
-      eep      -> samples column 0
-      log_age  -> samples column 1
-      distance -> samples column 3 (if 5-column)
-      Av       -> samples column 4 (if 5-column)
-      others   -> derived dict
-    """
-    if _is_bma(result):
-        samples = result.samples
-        derived = result.derived
-    else:
-        samples = result["samples"]
-        derived = result["derived"]
-
+def _extract_from(samples, derived, name):
+    """Extract a named parameter from a (samples, derived) pair."""
     if name == "age_gyr":
         return 10.0 ** samples[:, 1] / 1e9
     if name == "[Fe/H]":
@@ -106,7 +99,30 @@ def _extract_param(result, name):
         return samples[:, 4]
     if name in derived:
         return derived[name]
+    _aliases = {
+        "log_L": "logL", "logL": "log_L",
+        "log_g": "logg", "logg": "log_g",
+        "log_R": "logR", "logR": "log_R",
+    }
+    alt = _aliases.get(name)
+    if alt and alt in derived:
+        return derived[alt]
     raise KeyError(f"Parameter '{name}' not found in result")
+
+
+def _extract_param(result, name):
+    """Extract a named parameter array from a result dict or BMAResult.
+
+    Operates on the combined (BMA-weighted) samples/derived when given a
+    BMAResult. For per-grid raw samples use ``_extract_from`` directly.
+    """
+    if _is_bma(result):
+        samples = result.samples
+        derived = result.derived
+    else:
+        samples = result["samples"]
+        derived = result["derived"]
+    return _extract_from(samples, derived, name)
 
 
 def _get_model_labels(result):
@@ -185,18 +201,210 @@ def _finalize(fig, filename, dpi=150):
 # -----------------------------------------------------------------------
 
 
-class IsoPlotter:
+class ISOPlotter:
     """Plotting interface for LACHESIS isochrone fitting results.
+
+    Matches ARIADNE's SEDPlotter interface: load results from disk,
+    plot methods take no arguments.
 
     Parameters
     ----------
+    input_file : str or Path
+        Path to a LACHESIS .nc result file.
+    out_folder : str or Path
+        Directory for saving plot files.
+    pdf : bool
+        Save as PDF instead of PNG (default False).
     settings : str or Path, optional
-        Path to a plot_settings.dat file.  Falls back to the bundled
+        Path to a plot_settings.dat file. Falls back to the bundled
         default that mirrors ARIADNE's style.
     """
 
-    def __init__(self, settings=None):
+    def __init__(self, input_file, out_folder, pdf=False, settings=None):
+        import os
+        self.out_folder = str(out_folder)
+        self.pdf = pdf
+        self._ext = ".pdf" if pdf else ".png"
+        os.makedirs(self.out_folder, exist_ok=True)
+
+        self.result, self._grid_names, self._ariadne = self._load_nc(input_file)
+        self.bma = _is_bma(self.result)
         self._read_config(settings)
+
+    # ------------------------------------------------------------------
+    # I/O
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_nc(path):
+        """Load a .nc file and reconstruct a (result, grid_names) pair.
+
+        For BMA results:
+        - The combined BMA-weighted posterior is loaded from the
+          ``posterior`` group. This is what `result.samples`/`result.derived`
+          reflect — properly evidence-weighted draws as produced by
+          ``bayesian_model_average``.
+        - The per-grid RAW nested-sampling posteriors are loaded from the
+          ``posterior_{gname}`` groups and stored on
+          ``result.per_grid_samples`` / ``result.per_grid_derived``. These
+          are unweighted — used by the plotter for per-model histograms,
+          HR tracks, etc.
+
+        Returns
+        -------
+        result : BMAResult or dict
+            Combined posterior and derived quantities.
+        grid_names : list of str
+            Names of the grids used by the fit, in order. For BMA these
+            match ``result.model_names``; for single-grid fits it's a
+            one-element list from ``constant_data/grid_name``.
+        """
+        import arviz as az
+
+        idata = az.from_netcdf(str(path))
+
+        _SKIP_DERIVED = {"eep", "log_age", "feh", "distance", "Av", "age"}
+
+        def _group_ds(group):
+            """Return the xarray Dataset for a DataTree group."""
+            return group.ds if hasattr(group, "ds") else group
+
+        def _ds_to_samples_and_derived(ds):
+            cols = []
+            for k in ("eep", "log_age", "feh", "distance", "Av"):
+                if k in ds:
+                    cols.append(ds[k].values.flatten())
+            samples = np.column_stack(cols) if cols else np.empty((0, 0))
+            derived = {}
+            for var in ds.data_vars:
+                if var not in _SKIP_DERIVED:
+                    derived[var] = ds[var].values.flatten()
+            if "age" in ds:
+                derived["age_gyr"] = ds["age"].values.flatten()
+            return samples, derived
+
+        post = _group_ds(idata.posterior)
+        samples, derived = _ds_to_samples_and_derived(post)
+
+        # Extract ARIADNE-derived params (Teff, radius) if stored
+        const_group = getattr(idata, "constant_data", None)
+        const_ds = _group_ds(const_group) if const_group is not None else None
+        ariadne = {}
+        if const_ds is not None:
+            for key in ("ariadne_teff", "ariadne_teff_e",
+                        "ariadne_radius", "ariadne_radius_e"):
+                if key in const_ds:
+                    ariadne[key] = float(const_ds[key].values.flat[0])
+
+        # Single-grid fit
+        is_bma = const_ds is not None and "model_weights" in const_ds
+        if not is_bma:
+            grid_names = []
+            if const_ds is not None and "grid_name" in const_ds:
+                gn = const_ds["grid_name"].values
+                if gn.ndim == 0:
+                    grid_names = [str(gn)]
+                else:
+                    grid_names = [str(gn[0])]
+            return {"samples": samples, "derived": derived}, grid_names, ariadne
+
+        # BMA: load combined posterior + per-grid groups
+        weights = const_ds["model_weights"].values
+        log_ev = const_ds["log_evidence"].values
+        names = [str(n) for n in const_ds["model_names"].values]
+
+        per_grid_samples = {}
+        per_grid_derived = {}
+        for name in names:
+            group_name = f"posterior_{name}"
+            if not hasattr(idata, group_name):
+                continue
+            ds = _group_ds(getattr(idata, group_name))
+            s, d = _ds_to_samples_and_derived(ds)
+            if s.size == 0:
+                continue
+            per_grid_samples[name] = s
+            per_grid_derived[name] = d
+
+        # The combined posterior loaded above is BMA-weighted but doesn't
+        # carry per-sample `model` labels (the writer drops them). Rather
+        # than rely on the combined group at all, we REBUILD the combined
+        # samples from the per-grid groups using the BMA weights directly
+        # so the model labels are exact. This matches the in-memory
+        # `bayesian_model_average` logic: sample n_k = round(w_k * total)
+        # rows per grid and concatenate in model_names order.
+        if per_grid_samples:
+            total_per_grid = sum(
+                len(per_grid_samples[n]) for n in per_grid_samples
+            )
+            n_per_model = np.round(weights * total_per_grid).astype(int)
+            n_per_model = np.maximum(
+                n_per_model, (weights > 0).astype(int)
+            )
+
+            rng = np.random.default_rng()
+            new_samples_list = []
+            new_derived_lists = {}
+            model_labels = []
+            for name, n in zip(names, n_per_model):
+                if name not in per_grid_samples or n == 0:
+                    continue
+                s = per_grid_samples[name]
+                d = per_grid_derived[name]
+                n_take = int(n)
+                # Use replace=True so we faithfully reproduce BMA-weighted
+                # counts even when a grid's per-grid posterior has fewer
+                # raw samples than its share of the total.
+                idx = rng.choice(len(s), size=n_take, replace=True)
+                new_samples_list.append(s[idx])
+                for k, v in d.items():
+                    new_derived_lists.setdefault(k, []).append(v[idx])
+                model_labels.extend([name] * n_take)
+
+            if new_samples_list:
+                samples = np.concatenate(new_samples_list, axis=0)
+                # Keep only derived keys present in EVERY grid so all
+                # concatenations have the same length
+                valid_keys = [
+                    k for k, lst in new_derived_lists.items()
+                    if len(lst) == len(new_samples_list)
+                ]
+                derived = {
+                    k: np.concatenate(new_derived_lists[k])
+                    for k in valid_keys
+                }
+                derived["model"] = np.array(model_labels)
+
+        result = BMAResult(
+            weights=weights,
+            samples=samples,
+            derived=derived,
+            model_names=names,
+            log_evidences=log_ev,
+            per_grid_samples=per_grid_samples,
+            per_grid_derived=per_grid_derived,
+        )
+        return result, names, ariadne
+
+    def clean(self):
+        """Close all open figures (useful when iterating through many stars)."""
+        plt.close("all")
+
+    def _auto_load_grids(self):
+        """Load the grids used by the fit from the shipped HDF5 cache.
+
+        Called by plot_hr when the caller doesn't supply ``grids``.  Uses
+        the grid names stored on the plotter during ``_load_nc`` (from the
+        .nc file's ``constant_data/model_names`` or ``grid_name``).
+        """
+        from lachesis.fitter import _load_grid
+        out = {}
+        for name in self._grid_names:
+            try:
+                out[name] = _load_grid(name)
+            except Exception:
+                pass
+        return out
 
     # ------------------------------------------------------------------
     # Configuration
@@ -280,24 +488,10 @@ class IsoPlotter:
     # 1.  Corner plot (from scratch — no `corner` package)
     # ------------------------------------------------------------------
 
-    def plot_corner(self, result, params=None, filename=None):
-        """Corner plot of the posterior (implemented from scratch).
-
-        1D marginals on diagonal: histogram + KDE + median (firebrick
-        dashed) + 68 % CI lines (lightcoral dash-dot).
-        2D panels (lower triangle): 2D histogram + contour overlay.
-        For BMA results, per-model color-coding in both 1D and 2D.
-
-        Parameters
-        ----------
-        result : dict or BMAResult
-        params : list of str, optional
-        filename : str, optional
-
-        Returns
-        -------
-        matplotlib.figure.Figure
-        """
+    def plot_corner(self, params=None):
+        """Corner plot of the posterior."""
+        result = self.result
+        filename = f"{self.out_folder}/CORNER{self._ext}"
         if params is None:
             params = list(_DEFAULT_CORNER_PARAMS)
 
@@ -382,98 +576,136 @@ class IsoPlotter:
     # 2.  BMA histograms
     # ------------------------------------------------------------------
 
-    def plot_histograms(self, result, filename_prefix=None):
-        """Per-parameter ARIADNE-style BMA histograms.
+    def plot_histograms(self):
+        """Per-parameter BMA histograms (mirrors ARIADNE's plot_bma_hist).
 
-        For each parameter: per-model histograms with KDE overlay +
-        weighted combined posterior.  Both normalized (PDF) and weighted
-        (N) versions.
+        Writes two files per parameter into ``{out_folder}/histograms/``:
+        - ``{param}.png``          — normalized (PDF) panel
+        - ``weighted_{param}.png`` — weighted counts (N) panel
 
-        Returns a list of (fig_pdf, fig_weighted) tuples.
-
-        Parameters
-        ----------
-        result : dict or BMAResult
-        filename_prefix : str, optional
-            If given, saves ``{prefix}_{param}.png`` and
-            ``{prefix}_weighted_{param}.png``.
-
-        Returns
-        -------
-        list of (Figure, Figure)
+        In BMA mode, each model gets its own colored histogram + KDE.  The
+        PDF panel additionally shows TWO combined posteriors:
+        - Weighted sampling (cyan, dashed)  — BMA-weighted draws
+        - Weighted average  (pink,  dash-dot) — sum_i w_i * kde_i(x)
         """
-        params = list(_DEFAULT_CORNER_PARAMS)
-        available = []
-        for p in params:
+        import os
+
+        result = self.result
+        hist_dir = os.path.join(self.out_folder, "histograms")
+        os.makedirs(hist_dir, exist_ok=True)
+
+        is_bma = _is_bma(result)
+        has_per_grid = (
+            is_bma
+            and getattr(result, "per_grid_samples", None)
+            and getattr(result, "per_grid_derived", None)
+        )
+
+        # Parameters to plot — must exist in the combined posterior
+        params = []
+        for p in _DEFAULT_HIST_PARAMS:
             try:
                 _extract_param(result, p)
-                available.append(p)
+                params.append(p)
             except (KeyError, IndexError):
                 pass
-        params = available
 
-        model_labels = _get_model_labels(result)
-        is_bma = model_labels is not None
         if is_bma:
-            unique_models = list(dict.fromkeys(model_labels))
-            weights_dict = dict(
-                zip(result.model_names, result.weights)
-            )
+            weights_dict = dict(zip(result.model_names, result.weights))
         else:
-            unique_models = None
+            weights_dict = None
 
         figures = []
         for param in params:
-            arr = _extract_param(result, param)
             label = _label_for(param)
+            arr_combined = _extract_param(result, param)
 
             f1, ax1 = plt.subplots(figsize=(12, 6))
             f2, ax2 = plt.subplots(figsize=(12, 6))
 
-            if is_bma:
-                for k, model in enumerate(unique_models):
-                    mask = model_labels == model
-                    samp = arr[mask]
+            if has_per_grid:
+                # Use the RAW per-grid posteriors for per-model histograms.
+                # These are nested-sampling outputs without BMA resampling,
+                # so each model's true posterior shape is preserved
+                # regardless of its evidence weight.
+                per_model_samples = {}
+                per_model_kde = {}
+                for name in result.model_names:
+                    if name not in result.per_grid_samples:
+                        continue
+                    try:
+                        samp = _extract_from(
+                            result.per_grid_samples[name],
+                            result.per_grid_derived[name],
+                            param,
+                        )
+                    except KeyError:
+                        continue
                     samp = samp[np.isfinite(samp)]
                     if len(samp) < 2:
                         continue
-                    color = _MODEL_COLORS[k % len(_MODEL_COLORS)]
-                    w = weights_dict.get(model, 0)
-                    mlabel = f"{model} prob: {w:.3f}"
+                    per_model_samples[name] = samp
+                    try:
+                        per_model_kde[name] = gaussian_kde(samp)
+                    except np.linalg.LinAlgError:
+                        pass
 
-                    # Normalized (PDF)
+                for k, name in enumerate(result.model_names):
+                    if name not in per_model_samples:
+                        continue
+                    samp = per_model_samples[name]
+                    color = _MODEL_COLORS[k % len(_MODEL_COLORS)]
+                    w = weights_dict.get(name, 0)
+                    mlabel = f"{name} prob: {w:.3f}"
+
+                    # PDF panel — each model's own posterior shape
                     _kde_on_hist(
                         ax1, samp, color, bins=20, alpha=0.3,
                         label=mlabel,
                     )
-                    # Weighted (N)
+
+                    # Weighted (N) panel — bars scaled by BMA weight
                     n_w, bins_w, _ = ax2.hist(
                         samp, bins=20, alpha=0.3, label=mlabel,
                         color=color,
                         weights=np.full(len(samp), w),
                     )
-                    # KDE scaled to weighted histogram amplitude
-                    try:
-                        kde = gaussian_kde(samp)
+                    if name in per_model_kde and n_w.max() > 0:
+                        kde = per_model_kde[name]
                         xx = np.linspace(bins_w[0], bins_w[-1], 300)
                         scale = n_w.max() / max(kde(xx).max(), 1e-30)
                         ax2.plot(xx, kde(xx) * scale, color=color,
                                  lw=2, alpha=1)
+
+                # Combined overlays on the PDF panel
+                # (1) Weighted sampling: the BMA-weighted resampled combined
+                #     posterior (what result.samples actually contains)
+                finite = arr_combined[np.isfinite(arr_combined)]
+                if len(finite) >= 2:
+                    try:
+                        kde_ws = gaussian_kde(finite)
+                        xx = np.linspace(finite.min(), finite.max(), 400)
+                        ax1.plot(xx, kde_ws(xx), color="tab:cyan", lw=2,
+                                 alpha=1, ls="--", label="Weighted sampling")
                     except np.linalg.LinAlgError:
                         pass
 
-                # Combined weighted posterior on the PDF panel
-                finite = arr[np.isfinite(arr)]
-                if len(finite) >= 2:
-                    _kde_on_hist(
-                        ax1, finite, "tab:cyan", bins=20, alpha=0.3,
-                        label="Combined", kde_lw=2,
-                    )
+                # (2) Weighted average: sum_i w_i * kde_i(x) on a common grid
+                if per_model_kde:
+                    lo_wa = min(s.min() for s in per_model_samples.values())
+                    hi_wa = max(s.max() for s in per_model_samples.values())
+                    xx_wa = np.linspace(lo_wa, hi_wa, 400)
+                    pdf_wa = np.zeros_like(xx_wa)
+                    for name, kde_m in per_model_kde.items():
+                        w = weights_dict.get(name, 0)
+                        pdf_wa += w * kde_m(xx_wa)
+                    ax1.plot(xx_wa, pdf_wa, color="tab:pink", lw=2,
+                             alpha=1, ls="-.", label="Weighted average")
 
             else:
-                # Single-grid histogram
-                _kde_on_hist(ax1, arr, "tab:blue", bins=20, alpha=0.3)
-                _kde_on_hist(ax2, arr, "tab:blue", bins=20, alpha=0.3,
+                # No per-grid data available — single-grid histogram
+                _kde_on_hist(ax1, arr_combined, "tab:blue", bins=20, alpha=0.3)
+                _kde_on_hist(ax2, arr_combined, "tab:blue", bins=20, alpha=0.3,
                              density=False)
 
             # Style both axes
@@ -488,14 +720,12 @@ class IsoPlotter:
                              self.tick_labelsize)
                 ax.legend(loc=0, prop={"size": 16})
 
-            # Save
-            safe_name = param.replace("[", "").replace("]", "").replace("/", "_")
-            if filename_prefix:
-                _finalize(f1, f"{filename_prefix}_{safe_name}.png")
-                _finalize(f2, f"{filename_prefix}_weighted_{safe_name}.png")
-            else:
-                _finalize(f1, None)
-                _finalize(f2, None)
+            # Save with ARIADNE's filename convention
+            safe_name = (
+                param.replace("[", "").replace("]", "").replace("/", "_")
+            )
+            _finalize(f1, os.path.join(hist_dir, f"{safe_name}{self._ext}"))
+            _finalize(f2, os.path.join(hist_dir, f"weighted_{safe_name}{self._ext}"))
             figures.append((f1, f2))
 
         return figures
@@ -504,109 +734,53 @@ class IsoPlotter:
     # 3.  HR diagram with LineCollection tracks
     # ------------------------------------------------------------------
 
-    def plot_hr(self, result, grids=None, filename=None, n_samples=50):
+    def plot_hr(self, grids=None, n_samples=50):
         """Isochrone-track HR diagram (log Teff vs log L, inverted x-axis).
 
-        Best-fit track as mass-colored LineCollection.  Random posterior
-        draws as gray lines for uncertainty.  Star position with error
-        bars.
-
-        Parameters
-        ----------
-        result : dict or BMAResult
-        grids : dict of {name: grid_object}, optional
-            Keyed by model name.  Grid objects must expose ``_data``,
-            ``_feh_values``, ``_age_values``, ``_eep_values``, and
-            ``columns``.  If None, plots posterior density instead of
-            isochrone tracks.
-        filename : str, optional
-        n_samples : int
-            Number of random posterior isochrone draws (gray lines).
-
-        Returns
-        -------
-        matplotlib.figure.Figure
+        Best-fit track as mass-colored LineCollection.  Random BMA-weighted
+        posterior draws as gray lines for uncertainty.  Star position with
+        error bars.  Grids are loaded automatically from the shipped HDF5
+        cache based on the .nc's model names — no need to pass them in.
         """
+        result = self.result
+        filename = f"{self.out_folder}/HR_diagram{self._ext}"
         fig, ax = plt.subplots(figsize=self.hr_figsize)
 
         # --- Extract posterior for star position ---
-        log_teff_arr = _extract_param(result, "log_Teff") if "log_Teff" in (
-            result.derived if _is_bma(result) else result.get("derived", {})
-        ) else np.log10(_extract_param(result, "Teff"))
-        log_l_arr = _extract_param(result, "log_L")
+        # Prefer ARIADNE-derived Teff when available (better constrained
+        # by the SED than by the isochrone grid interpolation).
+        if "ariadne_teff" in self._ariadne:
+            med_lt = np.log10(self._ariadne["ariadne_teff"])
+            teff_e = self._ariadne.get("ariadne_teff_e", 0.0)
+            # Propagate linear error to log: σ_log = σ / (x * ln10)
+            log_err = teff_e / (self._ariadne["ariadne_teff"] * np.log(10))
+            lo_lt = log_err
+            hi_lt = log_err
+        else:
+            log_teff_arr = _extract_param(result, "log_Teff") if "log_Teff" in (
+                result.derived if _is_bma(result) else result.get("derived", {})
+            ) else np.log10(_extract_param(result, "Teff"))
+            med_lt, lo_lt, hi_lt = _percentile_str(log_teff_arr)
 
-        med_lt, lo_lt, hi_lt = _percentile_str(log_teff_arr)
+        log_l_arr = _extract_param(result, "log_L")
         med_ll, lo_ll, hi_ll = _percentile_str(log_l_arr)
 
-        if grids is not None and len(grids) > 0:
-            # Pick best grid (highest BMA weight or first)
-            if _is_bma(result):
-                best_idx = int(np.argmax(result.weights))
-                best_name = result.model_names[best_idx]
-                grid = grids.get(best_name, next(iter(grids.values())))
+        # Auto-load grids if the caller didn't supply them
+        if grids is None:
+            grids = self._auto_load_grids()
+
+        if grids:
+            if _is_bma(result) and "model" in result.derived:
+                self._draw_bma_tracks(
+                    ax, fig, result, grids, n_samples,
+                )
             else:
+                # Single-grid: pick the one available grid and use combined
+                # samples (which are from that single grid)
                 grid = next(iter(grids.values()))
-
-            # Best-fit isochrone track
-            age_arr = _extract_param(result, "age_gyr")
-            feh_arr = _extract_param(result, "[Fe/H]")
-            med_age = np.median(age_arr)
-            med_feh = np.median(feh_arr)
-            log_age_bf = np.log10(med_age * 1e9)
-
-            track = self._get_track(grid, log_age_bf, med_feh)
-            if track is not None:
-                logteff_t, logl_t, mass_t = track
-                # Mass-colored LineCollection
-                points = np.array([logteff_t, logl_t]).T.reshape(-1, 1, 2)
-                segments = np.concatenate(
-                    [points[:-1], points[1:]], axis=1
+                self._draw_single_grid_tracks(
+                    ax, fig, result, grid, n_samples,
                 )
-                norm = plt.Normalize(mass_t.min(), mass_t.max())
-                lc = LineCollection(
-                    segments, cmap=self.hr_cmap, norm=norm, linewidths=5,
-                )
-                lc.set_array(mass_t)
-                line = ax.add_collection(lc)
-                line.zorder = 1000
-                cbar = fig.colorbar(line, ax=ax, pad=0.01)
-                cbar.set_label(
-                    r"$M_\odot$", rotation=270,
-                    fontsize=self.fontsize, fontname=self.fontname,
-                    labelpad=20,
-                )
-                for ll in cbar.ax.yaxis.get_ticklabels():
-                    ll.set_fontsize(self.tick_labelsize)
-
-            # Random posterior draws
-            n_draw = min(n_samples, len(age_arr))
-            rng = np.random.default_rng()
-            idx = rng.choice(len(age_arr), size=n_draw, replace=False)
-            for ii in idx:
-                la = np.log10(age_arr[ii] * 1e9)
-                feh_i = feh_arr[ii]
-                t = self._get_track(grid, la, feh_i)
-                if t is not None:
-                    ax.plot(t[0], t[1], color="gray", alpha=0.15,
-                            lw=0.5, zorder=1)
-
-        else:
-            # No grids — plot posterior density
-            ax.hist2d(
-                log_teff_arr, log_l_arr, bins=60, cmap="Blues",
-                density=True,
-            )
-            model_labels = _get_model_labels(result)
-            if model_labels is not None:
-                unique_models = list(dict.fromkeys(model_labels))
-                for k, model in enumerate(unique_models):
-                    mask = model_labels == model
-                    color = _MODEL_COLORS[k % len(_MODEL_COLORS)]
-                    self._plot_contour(
-                        ax, log_teff_arr[mask], log_l_arr[mask],
-                        color=color, label=model,
-                    )
-                ax.legend(fontsize=16, loc="upper left")
 
         # Star position
         ax.errorbar(
@@ -630,27 +804,34 @@ class IsoPlotter:
         )
         _apply_style(ax, self.fontname, self.fontsize, self.tick_labelsize)
 
+        # Error cross in the lower-left corner showing the 1σ scale.
+        # Drawn after axis limits are finalized so the corner position
+        # maps correctly to data coordinates.
+        fig.canvas.draw()
+        xlim = ax.get_xlim()  # inverted: xlim[0] > xlim[1]
+        ylim = ax.get_ylim()
+        cx = xlim[0] - 0.10 * (xlim[0] - xlim[1])
+        cy = ylim[0] + 0.10 * (ylim[1] - ylim[0])
+        xerr = 0.5 * (lo_lt + hi_lt)
+        yerr = 0.5 * (lo_ll + hi_ll)
+        ax.errorbar(
+            cx, cy, xerr=xerr, yerr=yerr,
+            color="k", fmt="none", capsize=4, lw=1.5,
+            zorder=1003,
+        )
+
         return _finalize(fig, filename)
 
     # ------------------------------------------------------------------
     # 4.  Mass vs Age posterior
     # ------------------------------------------------------------------
 
-    def plot_mass_age(self, result, filename=None):
-        """Mass vs Age 2D density with contours.
-
-        For BMA results, per-model color-coding.
-
-        Parameters
-        ----------
-        result : dict or BMAResult
-        filename : str, optional
-
-        Returns
-        -------
-        matplotlib.figure.Figure
-        """
-        mass = _extract_param(result, "initial_mass")
+    def plot_mass_age(self):
+        """Mass vs Age 2D density with contours."""
+        result = self.result
+        filename = f"{self.out_folder}/mass_age{self._ext}"
+        # Current stellar mass, not ZAMS — matches the rest of the plotter
+        mass = _extract_param(result, "mass")
         age = _extract_param(result, "age_gyr")
         model_labels = _get_model_labels(result)
 
@@ -673,7 +854,7 @@ class IsoPlotter:
             self._plot_contour(ax, mass, age, color="navy")
 
         ax.set_xlabel(
-            r"$M_{\mathrm{init}}$ [$M_\odot$]",
+            r"$M_\star$ [$M_\odot$]",
             fontsize=self.fontsize, fontname=self.fontname,
         )
         ax.set_ylabel(
@@ -688,18 +869,10 @@ class IsoPlotter:
     # 5.  Model weights bar chart
     # ------------------------------------------------------------------
 
-    def plot_model_weights(self, bma_result, filename=None):
-        """Bar chart of BMA model weights with weight annotations.
-
-        Parameters
-        ----------
-        bma_result : BMAResult
-        filename : str, optional
-
-        Returns
-        -------
-        matplotlib.figure.Figure
-        """
+    def plot_model_weights(self):
+        """Bar chart of BMA model weights with weight annotations."""
+        bma_result = self.result
+        filename = f"{self.out_folder}/model_weights{self._ext}"
         if not _is_bma(bma_result):
             raise TypeError("plot_model_weights requires a BMAResult")
 
@@ -741,20 +914,12 @@ class IsoPlotter:
     # 6.  LaTeX table output
     # ------------------------------------------------------------------
 
-    def to_latex(self, result, params=None):
+    def to_latex(self, params=None):
         r"""Return a dict of LaTeX-formatted credibility intervals.
 
         Format: ``$value^{+hi}_{-lo}$`` using 68 % intervals.
-
-        Parameters
-        ----------
-        result : dict or BMAResult
-        params : list of str, optional
-
-        Returns
-        -------
-        dict of {param_name: latex_string}
         """
+        result = self.result
         if params is None:
             params = list(_DEFAULT_LATEX_PARAMS)
 
@@ -775,7 +940,7 @@ class IsoPlotter:
     # 7.  Multi-panel summary
     # ------------------------------------------------------------------
 
-    def summary(self, result, filename=None):
+    def summary(self):
         """Multi-panel summary figure.
 
         Layout (2x2 GridSpec):
@@ -783,16 +948,9 @@ class IsoPlotter:
           [0,1] HR diagram
           [1,0] Mass-Age
           [1,1] Model weights (BMA) or [Fe/H] marginal
-
-        Parameters
-        ----------
-        result : dict or BMAResult
-        filename : str, optional
-
-        Returns
-        -------
-        matplotlib.figure.Figure
         """
+        result = self.result
+        filename = f"{self.out_folder}/summary{self._ext}"
         fig = plt.figure(figsize=(20, 16))
         gs = GridSpec(2, 2, figure=fig, hspace=0.35, wspace=0.35)
 
@@ -1119,25 +1277,135 @@ class IsoPlotter:
         if label is not None:
             ax.plot([], [], color=color, lw=1.5, label=label)
 
+    def _draw_bma_tracks(self, ax, fig, result, grids, n_samples):
+        """Draw gray BMA-weighted posterior tracks + the best-fit track.
+
+        The gray tracks are drawn by sampling ``n_samples`` random rows from
+        ``result.samples``, which is already BMA-weighted — so tracks are
+        drawn from each grid in proportion to its evidence weight. Each
+        sample's model label (``result.derived["model"]``) picks the grid
+        to use, and its ``(log_age, feh)`` define where on the isochrone
+        manifold to draw from.
+
+        The best-fit track is drawn as a thick mass-colored LineCollection
+        using the best-weighted grid's per-model median ``(log_age, feh)``.
+        """
+        model_labels = result.derived["model"]
+        samples = result.samples
+
+        # --- Gray posterior draws ---
+        n_total = len(samples)
+        n_draw = min(n_samples, n_total)
+        rng = np.random.default_rng()
+        idx = rng.choice(n_total, size=n_draw, replace=False)
+        for i in idx:
+            name = str(model_labels[i])
+            grid = grids.get(name)
+            if grid is None:
+                continue
+            log_age = samples[i, 1]
+            feh = samples[i, 2]
+            t = self._get_track(grid, log_age, feh)
+            if t is not None:
+                ax.plot(t[0], t[1], color="gray", alpha=0.2, lw=0.6,
+                        zorder=1)
+
+        # --- Best-fit colored track (best-weighted model's own median) ---
+        best_idx = int(np.argmax(result.weights))
+        best_name = result.model_names[best_idx]
+        best_grid = grids.get(best_name)
+        if best_grid is None:
+            return
+
+        mask = model_labels == best_name
+        if mask.sum() < 3:
+            return
+        log_age_bf = float(np.median(samples[mask, 1]))
+        feh_bf = float(np.median(samples[mask, 2]))
+
+        track = self._get_track(best_grid, log_age_bf, feh_bf)
+        if track is None:
+            return
+        self._draw_best_fit_track(ax, fig, *track)
+
+    def _draw_single_grid_tracks(self, ax, fig, result, grid, n_samples):
+        """Draw gray posterior tracks + best-fit track for a single-grid fit."""
+        samples = result.samples if _is_bma(result) else result["samples"]
+
+        # --- Gray posterior draws ---
+        n_total = len(samples)
+        n_draw = min(n_samples, n_total)
+        rng = np.random.default_rng()
+        idx = rng.choice(n_total, size=n_draw, replace=False)
+        for i in idx:
+            log_age = samples[i, 1]
+            feh = samples[i, 2]
+            t = self._get_track(grid, log_age, feh)
+            if t is not None:
+                ax.plot(t[0], t[1], color="gray", alpha=0.2, lw=0.6,
+                        zorder=1)
+
+        # --- Best-fit colored track ---
+        log_age_bf = float(np.median(samples[:, 1]))
+        feh_bf = float(np.median(samples[:, 2]))
+        track = self._get_track(grid, log_age_bf, feh_bf)
+        if track is None:
+            return
+        self._draw_best_fit_track(ax, fig, *track)
+
+    def _draw_best_fit_track(self, ax, fig, logteff_t, logl_t, mass_t):
+        """Render a mass-colored LineCollection for the best-fit track."""
+        points = np.array([logteff_t, logl_t]).T.reshape(-1, 1, 2)
+        segments = np.concatenate([points[:-1], points[1:]], axis=1)
+        norm = plt.Normalize(mass_t.min(), mass_t.max())
+        lc = LineCollection(
+            segments, cmap=self.hr_cmap, norm=norm, linewidths=5,
+        )
+        lc.set_array(mass_t)
+        line = ax.add_collection(lc)
+        line.zorder = 1000
+        cbar = fig.colorbar(line, ax=ax, pad=0.01)
+        cbar.set_label(
+            r"$M_\odot$", rotation=270,
+            fontsize=self.fontsize, fontname=self.fontname,
+            labelpad=20,
+        )
+        for ll in cbar.ax.yaxis.get_ticklabels():
+            ll.set_fontsize(self.tick_labelsize)
+
     @staticmethod
     def _get_track(grid, log_age, feh):
-        """Extract isochrone track (logTeff, logL, mass) from a grid.
+        """Extract isochrone track (logTeff, logL, current mass) from a grid.
 
         Returns None if the requested (age, feh) falls outside the grid
-        or if the track has insufficient valid points.
+        or if the track has insufficient valid points. Uses ``star_mass``
+        (current mass after mass loss) for the mass axis, matching the
+        rest of the plotter's "current mass" convention.
         """
         try:
             cols = grid.columns
             ci_lt = cols.index("log_Teff")
             ci_ll = cols.index("log_L")
-            ci_m = cols.index("initial_mass")
+            # Prefer current mass; fall back to initial_mass if a grid
+            # only exposes one of them.
+            if "star_mass" in cols:
+                ci_m = cols.index("star_mass")
+            else:
+                ci_m = cols.index("initial_mass")
 
             # Nearest feh
             fi = int(np.argmin(np.abs(grid._feh_values - feh)))
             # Nearest age
             ai = int(np.argmin(np.abs(grid._age_values - log_age)))
 
-            track_data = grid._data[fi, ai, :, :]
+            # 4D grids: (feh, age, eep, col)
+            # 5D grids (STAREVOL): (feh, vini, age, eep, col) — pick middle vini
+            if grid._data.ndim == 5:
+                vi = grid._data.shape[1] // 2
+                track_data = grid._data[fi, vi, ai, :, :]
+            else:
+                track_data = grid._data[fi, ai, :, :]
+
             # Remove NaN rows
             valid = np.all(np.isfinite(track_data[:, [ci_lt, ci_ll, ci_m]]),
                            axis=1)

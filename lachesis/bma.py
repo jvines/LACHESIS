@@ -22,6 +22,12 @@ class BMAResult:
     derived: dict                # combined derived quantities + "model" labels
     model_names: list[str]       # names of each model
     log_evidences: np.ndarray    # (n_models,) log-evidence per model
+    # Optional per-grid raw nested-sampling posteriors, keyed by model name.
+    # These are the unweighted per-grid outputs — used by the plotter for
+    # per-model histograms, HR tracks, etc. `samples`/`derived` above are
+    # BMA-weighted; these are not.
+    per_grid_samples: dict | None = None  # {name: (n, n_params) array}
+    per_grid_derived: dict | None = None  # {name: derived dict}
 
 
 def bayesian_model_average(
