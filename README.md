@@ -414,7 +414,7 @@ idata = az.from_netcdf("output/lachesis_HD_209458_BMA.nc")
 print(idata.posterior)
 ```
 
-# Using ARIADNE and LACHESIS together
+# The Thread
 
 **LACHESIS** and
 [**ARIADNE**](https://github.com/jvines/astroARIADNE)
