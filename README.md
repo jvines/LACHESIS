@@ -416,18 +416,26 @@ print(idata.posterior)
 
 # The Thread
 
-**LACHESIS** and
-[**ARIADNE**](https://github.com/jvines/astroARIADNE)
-([Vines & Jenkins 2022](https://ui.adsabs.harvard.edu/abs/2022MNRAS.513.2719V/abstract))
-are designed to work together for end-to-end stellar characterization. Both
-exchange full posteriors via arviz InferenceData in netCDF4 format. Each tool
-is standalone — the pipeline is the happy path, not the only path.
+**LACHESIS** is part of a suite of tools for end-to-end stellar
+characterization. All tools exchange full posteriors via arviz InferenceData in
+netCDF4 format. Each tool is standalone — the pipeline is the happy path, not
+the only path.
 
-When used together, the recommended pipeline is:
+- [**SPECIES**](https://github.com/jvines/species) — Spectroscopic parameters
+  (Teff, logg, [Fe/H], vmic, abundances) from equivalent widths. The most
+  direct atmospheric measurement — no photometry, no evolutionary models.
+- [**ARIADNE**](https://github.com/jvines/astroARIADNE)
+  ([Vines & Jenkins 2022](https://ui.adsabs.harvard.edu/abs/2022MNRAS.513.2719V/abstract))
+  — SED fitting for Teff, radius, luminosity, distance, Av. Uses SPECIES
+  spectroscopic priors to break SED degeneracies.
+- **LACHESIS** (this tool) — Isochrone fitting for mass, age, evolutionary
+  state. Uses ARIADNE posteriors ([Fe/H], logg) as KDE priors.
 
-1. **ARIADNE** fits the SED → Teff, radius, distance, Av, luminosity
-2. **LACHESIS** fits isochrones with ARIADNE's [Fe/H] and logg posteriors as KDE priors → mass, age, evolutionary state
-3. Final parameters combine: atmosphere from ARIADNE, evolution from LACHESIS
+The natural pipeline follows increasing model dependence:
+
+1. **SPECIES** → spectroscopic Teff, logg, [Fe/H] (atmosphere models only)
+2. **ARIADNE** → Teff, R\*, L\*, distance, Av (atmosphere + photometry + distance)
+3. **LACHESIS** → mass, age, evolutionary state (all of the above + stellar evolution)
 
 | Parameter | Best source |
 |-----------|------------|
@@ -438,6 +446,7 @@ When used together, the recommended pipeline is:
 | Luminosity | ARIADNE |
 | [Fe/H] | Either (spectroscopic prior) |
 | logg | Either (spectroscopic prior) |
+| vmic, [X/H] | SPECIES |
 | **Mass** | **LACHESIS** |
 | **Age** | **LACHESIS** |
 | **Evol. state** | **LACHESIS** |
