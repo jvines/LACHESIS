@@ -459,3 +459,6 @@ If you use **LACHESIS** in your research, please cite:
 > Vines et al. (in prep.)
 
 A BibTeX entry will be provided when the paper is published.
+
+Additionally, you can find how to cite **LACHESIS** and its dependencies
+[here](https://github.com/jvines/LACHESIS/blob/master/citations.md).
