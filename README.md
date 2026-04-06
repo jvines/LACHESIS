@@ -6,9 +6,11 @@ state by fitting broadband photometry to isochrone grids using nested sampling,
 with Bayesian Model Averaging across multiple stellar evolution models.
 
 It is designed as the natural companion to
-[ARIADNE](https://github.com/jvines/astroARIADNE): where ARIADNE characterizes
-stellar atmospheres (Teff, logg, [Fe/H], radius) via SED fitting, **LACHESIS**
-takes over for the evolutionary parameters that require isochrone models.
+[**ARIADNE**](https://github.com/jvines/astroARIADNE)
+([Vines & Jenkins 2022](https://ui.adsabs.harvard.edu/abs/2022MNRAS.513.2719V/abstract)):
+where ARIADNE characterizes stellar atmospheres (Teff, logg, [Fe/H], radius)
+via SED fitting, **LACHESIS** takes over for the evolutionary parameters that
+require isochrone models.
 
 # Installation
 
@@ -397,7 +399,7 @@ When `f.out_folder` is set, **LACHESIS** writes:
 
 - `lachesis_{starname}_BMA.nc` — Full posterior as an arviz InferenceData
   (netCDF4). This is the canonical format for passing results to downstream
-  tools like PROTEUS.
+  tools.
 - `lachesis_{starname}_BMA.dat` — Summary statistics (median, 16th/84th
   percentiles) in human-readable format.
 - `model_weights.dat` — BMA posterior model probabilities and log-evidences per
@@ -412,16 +414,14 @@ idata = az.from_netcdf("output/lachesis_HD_209458_BMA.nc")
 print(idata.posterior)
 ```
 
-# The Greek ecosystem
+# Using ARIADNE and LACHESIS together
 
-**LACHESIS** is part of a suite of tools for stellar and exoplanet characterization:
-
-- **ARIADNE** (Vines & Jenkins 2022) — SED fitting for stellar atmospheres
-- **LACHESIS** (this tool) — Isochrone fitting for ages, masses, evolutionary states
-- **PROTEUS** (in development) — Trans-dimensional RV orbit fitting
-
-All tools exchange full posteriors via arviz InferenceData in netCDF4 format.
-Each tool is standalone — the pipeline is the happy path, not the only path.
+**LACHESIS** and
+[**ARIADNE**](https://github.com/jvines/astroARIADNE)
+([Vines & Jenkins 2022](https://ui.adsabs.harvard.edu/abs/2022MNRAS.513.2719V/abstract))
+are designed to work together for end-to-end stellar characterization. Both
+exchange full posteriors via arviz InferenceData in netCDF4 format. Each tool
+is standalone — the pipeline is the happy path, not the only path.
 
 When used together, the recommended pipeline is:
 
