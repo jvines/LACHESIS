@@ -1,9 +1,17 @@
 """Star class — holds observed stellar properties for isochrone fitting."""
 
 import numpy as np
+from scipy.constants import h as _h, c as _c, k as _k
 
 from lachesis.display import display_banner
 from lachesis.error import InputError
+
+
+def _planck_mag(lam_m, T):
+    """Planck function in magnitude space (arbitrary zero-point)."""
+    x = _h * _c / (lam_m * _k * np.maximum(T, 1.0))
+    flux = 1.0 / (lam_m ** 3 * (np.exp(np.clip(x, 0, 500)) - 1.0))
+    return -2.5 * np.log10(np.maximum(flux, 1e-300))
 
 
 class Star:
@@ -146,6 +154,10 @@ class Star:
         # Max line-of-sight extinction from dustmaps (like ARIADNE)
         if self.Av is None:
             self._query_extinction(dustmap)
+
+        # Blackbody QC: flag photometry outliers (warn only, no removal)
+        if self.magnitudes:
+            self._blackbody_check()
 
     _DUSTMAPS = {
         'SFD': ('dustmaps.sfd', 'SFDQuery'),
@@ -331,6 +343,180 @@ class Star:
             star.external_posteriors["log_g"] = logg_arr
 
         return star
+
+    # --- Magnitude management ---
+
+    def add_mag(self, mag: float, err: float, band: str):
+        """Add or update a magnitude."""
+        self.magnitudes[band] = (mag, err)
+
+    def remove_mag(self, band: str):
+        """Remove a magnitude by pyphot band name."""
+        self.magnitudes.pop(band, None)
+
+    def print_mags(self):
+        """Print magnitudes sorted by wavelength."""
+        from lachesis.filters import FILTER_WAVELENGTH
+        bands = sorted(
+            self.magnitudes.keys(),
+            key=lambda b: FILTER_WAVELENGTH.get(b, 99.0),
+        )
+        for b in bands:
+            mag, err = self.magnitudes[b]
+            print(f"  {b:25s}  {mag:7.3f} +/- {err:.3f}")
+
+    # --- Blackbody photometry QC ---
+
+    def _blackbody_check(self, sigma=5.0, err_floor=0.05):
+        """Flag photometry outliers via a blackbody consensus fit.
+
+        Fits a Planck function in magnitude space across all bands.
+        Bands with normalized residuals > sigma are flagged with a
+        warning but NOT removed.
+        """
+        from lachesis.filters import FILTER_WAVELENGTH
+
+        bands, wavelengths, mags, errs = [], [], [], []
+        for b, (m, e) in self.magnitudes.items():
+            lam = FILTER_WAVELENGTH.get(b)
+            if lam is not None and e > 0:
+                bands.append(b)
+                wavelengths.append(lam * 1e-6)  # microns → metres
+                mags.append(m)
+                errs.append(max(e, err_floor))
+
+        if len(bands) < 3:
+            self._bb_teff = None
+            self._bb_residuals = {}
+            return
+
+        wavelengths = np.array(wavelengths)
+        mags = np.array(mags)
+        errs = np.array(errs)
+
+        # Grid search for best-fit temperature
+        temps = np.linspace(2000, 60000, 300)
+        best_rss = np.inf
+        best_T = 5000.0
+        best_offset = 0.0
+
+        for T in temps:
+            pred = _planck_mag(wavelengths, T)
+            offset = np.mean(mags - pred)
+            resid = (mags - (pred + offset)) / errs
+            rss = np.sum(resid ** 2)
+            if rss < best_rss:
+                best_rss = rss
+                best_T = T
+                best_offset = offset
+
+        # Compute per-band residuals at best T
+        pred = _planck_mag(wavelengths, best_T) + best_offset
+        self._bb_teff = best_T
+        self._bb_offset = best_offset
+        self._bb_residuals = {}
+        flagged = []
+
+        for i, b in enumerate(bands):
+            z = abs(mags[i] - pred[i]) / errs[i]
+            self._bb_residuals[b] = (
+                wavelengths[i] * 1e6,  # back to microns for plotting
+                mags[i], pred[i], z,
+            )
+            if z > sigma:
+                flagged.append((b, z))
+
+        if flagged:
+            from termcolor import colored
+            for b, z in flagged:
+                print(colored(
+                    f"\t\t\tWARNING: {b} is potentially problematic "
+                    f"({z:.1f}sigma from blackbody fit) -- not removed",
+                    "yellow",
+                ))
+
+    def plot_blackbody(self, outfile=None):
+        """Diagnostic plot: blackbody fit with color-coded photometry.
+
+        Parameters
+        ----------
+        outfile : str, optional
+            Save path. If None, calls plt.show().
+        """
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import LogNorm
+
+        if not getattr(self, "_bb_residuals", None):
+            print("No blackbody check results — call _blackbody_check() first.")
+            return
+
+        fig, (ax_main, ax_res) = plt.subplots(
+            2, 1, figsize=(8, 6), height_ratios=[3, 1],
+            sharex=True, gridspec_kw={"hspace": 0.05},
+        )
+
+        # Collect data
+        bands = list(self._bb_residuals.keys())
+        lams = np.array([self._bb_residuals[b][0] for b in bands])
+        obs = np.array([self._bb_residuals[b][1] for b in bands])
+        pred = np.array([self._bb_residuals[b][2] for b in bands])
+        zvals = np.array([self._bb_residuals[b][3] for b in bands])
+        errs_raw = np.array([
+            max(self.magnitudes[b][1], 0.05) for b in bands
+        ])
+
+        # Wavelength colormap
+        cmap = plt.cm.Spectral_r
+        norm = LogNorm(vmin=max(lams.min(), 0.1), vmax=lams.max())
+
+        # Smooth blackbody curve
+        lam_fine = np.geomspace(lams.min() * 0.8, lams.max() * 1.2, 500)
+        bb_fine = _planck_mag(lam_fine * 1e-6, self._bb_teff) + self._bb_offset
+        ax_main.plot(lam_fine, bb_fine, "k-", lw=1, alpha=0.5, zorder=1)
+
+        # Plot each band
+        for i, b in enumerate(bands):
+            color = cmap(norm(lams[i]))
+            marker = "o"
+            edgecolor = color
+            if zvals[i] > 5.0:
+                marker = "s"
+                edgecolor = "red"
+            ax_main.errorbar(
+                lams[i], obs[i], yerr=errs_raw[i],
+                fmt=marker, color=color, mec=edgecolor, mew=1.5,
+                ms=7, capsize=2, zorder=3, label=b,
+            )
+            # Residuals
+            ax_res.scatter(
+                lams[i], (obs[i] - pred[i]) / errs_raw[i],
+                c=[color], marker=marker, edgecolors=edgecolor,
+                linewidths=1.5, s=50, zorder=3,
+            )
+
+        ax_main.invert_yaxis()
+        ax_main.set_ylabel("Magnitude")
+        ax_main.set_title(
+            f"{self.starname}  —  $T_{{\\rm bb}}$ = {self._bb_teff:.0f} K"
+        )
+        ax_main.legend(
+            fontsize=6, ncol=3, loc="upper right",
+            framealpha=0.7,
+        )
+
+        ax_res.axhline(0, color="k", lw=0.5)
+        ax_res.axhline(5, color="r", lw=0.5, ls="--", alpha=0.5)
+        ax_res.axhline(-5, color="r", lw=0.5, ls="--", alpha=0.5)
+        ax_res.set_xlabel("Wavelength ($\\mu$m)")
+        ax_res.set_ylabel("Residual ($\\sigma$)")
+        ax_res.set_xscale("log")
+
+        fig.tight_layout()
+        if outfile:
+            fig.savefig(outfile, dpi=300, bbox_inches="tight")
+            plt.close(fig)
+        else:
+            plt.show()
 
     @property
     def observed(self) -> dict[str, float]:
