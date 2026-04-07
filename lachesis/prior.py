@@ -1,18 +1,20 @@
 """Prior transforms and log-prior for isochrone fitting.
 
-The EEP prior follows Morton's isochrones:
-    P(eep | age, feh) = IMF(mass(eep, age, feh)) * |dm/dEEP|
-
-This transforms a Salpeter/Chabrier IMF on mass into EEP space via
-the Jacobian dm_deep. Without this, the prior is flat in EEP which
-over-weights high-mass evolutionary states.
+The EEP prior P(eep) = IMF(mass) * |dm/dEEP| transforms the initial
+mass function into EEP space via the Jacobian dm_deep (Dotter 2016).
+Without this, the prior is flat in EEP which over-weights high-mass
+evolutionary states.
 """
 
 import numpy as np
 
 
+# ---------------------------------------------------------------------------
+# Initial Mass Functions
+# ---------------------------------------------------------------------------
+
 def salpeter_imf(mass: float) -> float:
-    """Salpeter IMF: dN/dM ∝ M^{-2.35}."""
+    """Salpeter (1955) IMF: dN/dM ∝ M^{-2.35}."""
     if mass <= 0:
         return 0.0
     return mass ** (-2.35)
@@ -36,6 +38,51 @@ _IMF_FUNCTIONS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# [Fe/H] population priors
+# ---------------------------------------------------------------------------
+
+def _feh_prior_morton(feh: float, halo_fraction: float = 0.001) -> float:
+    """Morton/Bovy [Fe/H] prior: 2-Gaussian local disk + Gaussian halo.
+
+    Based on a fit to the local SDSS metallicity distribution
+    (Casagrande et al. 2011).
+
+    Disk (local):
+      - Component 1: weight=0.8, mu=+0.016, sigma=0.15
+      - Component 2: weight=0.2, mu=-0.15,  sigma=0.22
+    Halo:
+      - mu=-1.5, sigma=0.4
+    """
+    inv_sqrt2pi = 0.3989422804014327
+    # Disk: mixture of two Gaussians
+    g1 = 0.8 / 0.15 * inv_sqrt2pi * np.exp(
+        -0.5 * ((feh - 0.016) / 0.15) ** 2
+    )
+    g2 = 0.2 / 0.22 * inv_sqrt2pi * np.exp(
+        -0.5 * ((feh + 0.15) / 0.22) ** 2
+    )
+    disk = g1 + g2
+    # Halo
+    halo = inv_sqrt2pi / 0.4 * np.exp(
+        -0.5 * ((feh + 1.5) / 0.4) ** 2
+    )
+    return (1.0 - halo_fraction) * disk + halo_fraction * halo
+
+
+def _feh_prior_rave(feh: float) -> float:
+    """ARIADNE's default [Fe/H] prior: N(-0.125, 0.234).
+
+    Gaussian summary of the RAVE DR5 metallicity distribution
+    (Kunder et al. 2017).
+    """
+    mu, sigma = -0.125, 0.234
+    return (
+        0.3989422804014327 / sigma
+        * np.exp(-0.5 * ((feh - mu) / sigma) ** 2)
+    )
+
+
 class IsochonePrior:
     """Prior for the isochrone fitting parameter space.
 
@@ -50,6 +97,7 @@ class IsochonePrior:
         age_range: tuple[float, float],
         feh_range: tuple[float, float],
         feh_prior: tuple[str, ...] | None = None,
+        age_prior: str = "log_uniform",
         distance_prior: tuple[str, ...] | None = None,
         av_range: tuple[float, float] | None = None,
         vini_range: tuple[float, float] | None = None,
@@ -62,6 +110,11 @@ class IsochonePrior:
         self._binary = binary
         self._imf = _IMF_FUNCTIONS.get(imf, chabrier_imf)
 
+        # Age prior type: "log_uniform" (flat in log_age, default) or
+        # "uniform" (flat in linear age — P(log_age) ∝ 10^log_age).
+        self._age_type = age_prior
+
+        # [Fe/H] prior
         if feh_prior is None:
             self._feh_type = "uniform"
         else:
@@ -73,6 +126,9 @@ class IsochonePrior:
                 # feh_prior = ("kde", samples_array)
                 samples = np.asarray(feh_prior[1])
                 self._build_feh_kde(samples)
+            elif self._feh_type in ("morton", "rave"):
+                # Named population priors — build inverse CDF for sampling
+                self._build_named_feh_prior(self._feh_type)
 
         self._has_distance = distance_prior is not None
         self._has_av = av_range is not None
@@ -110,6 +166,25 @@ class IsochonePrior:
         self._feh_cdf_x = grid[mask]
         self._feh_cdf_y = cdf[mask]
 
+    def _build_named_feh_prior(self, name: str):
+        """Build inverse CDF for a named [Fe/H] population prior."""
+        if name == "morton":
+            pdf_func = _feh_prior_morton
+        elif name == "rave":
+            pdf_func = _feh_prior_rave
+        else:
+            self._feh_type = "uniform"
+            return
+        grid = np.linspace(self.feh_lo, self.feh_hi, 1024)
+        pdf = np.array([pdf_func(x) for x in grid])
+        cdf = np.cumsum(pdf)
+        cdf = cdf / cdf[-1]
+        mask = np.concatenate([[True], np.diff(cdf) > 0])
+        self._feh_cdf_x = grid[mask]
+        self._feh_cdf_y = cdf[mask]
+        # Store the pdf function for log_prior evaluation
+        self._feh_named_func = pdf_func
+
     @property
     def param_names(self) -> list[str]:
         names = ["eep", "log_age", "feh"]
@@ -131,14 +206,25 @@ class IsochonePrior:
         """Map unit cube [0,1]^N → physical parameter space."""
         theta = np.empty_like(u)
         theta[0] = self.eep_lo + u[0] * (self.eep_hi - self.eep_lo)
-        theta[1] = self.age_lo + u[1] * (self.age_hi - self.age_lo)
 
+        # Age prior
+        if self._age_type == "uniform":
+            # Flat in LINEAR age: P(tau) = const → P(log_tau) ∝ 10^log_tau
+            # Inverse CDF: log_tau = log10(10^lo + u * (10^hi - 10^lo))
+            tau_lo = 10.0 ** self.age_lo
+            tau_hi = 10.0 ** self.age_hi
+            theta[1] = np.log10(tau_lo + u[1] * (tau_hi - tau_lo))
+        else:
+            # Flat in log age (default)
+            theta[1] = self.age_lo + u[1] * (self.age_hi - self.age_lo)
+
+        # [Fe/H] prior
         if self._feh_type == "gaussian":
             from scipy.special import ndtri
             theta[2] = self._feh_mean + self._feh_sigma * ndtri(u[2])
             theta[2] = np.clip(theta[2], self.feh_lo, self.feh_hi)
-        elif self._feh_type == "kde":
-            # Inverse CDF sampling from the ARIADNE posterior KDE
+        elif self._feh_type in ("kde", "morton", "rave"):
+            # Inverse CDF sampling (KDE, Morton, or RAVE)
             theta[2] = np.interp(u[2], self._feh_cdf_y, self._feh_cdf_x)
         else:
             theta[2] = self.feh_lo + u[2] * (self.feh_hi - self.feh_lo)
@@ -225,8 +311,16 @@ class IsochonePrior:
             # Fallback: flat in EEP (wrong but won't crash)
             lnp += -np.log(self.eep_hi - self.eep_lo)
 
-        # Uniform in log_age
-        lnp += -np.log(self.age_hi - self.age_lo)
+        # Age prior
+        if self._age_type == "uniform":
+            # Flat in linear age: P(log_tau) ∝ 10^log_tau
+            # log density = log_age * ln(10) - log(10^hi - 10^lo)
+            lnp += log_age * np.log(10.0) - np.log(
+                10.0 ** self.age_hi - 10.0 ** self.age_lo
+            )
+        else:
+            # Flat in log_age
+            lnp += -np.log(self.age_hi - self.age_lo)
 
         # [Fe/H] prior
         if self._feh_type == "gaussian":
@@ -237,6 +331,11 @@ class IsochonePrior:
             )
         elif self._feh_type == "kde":
             pdf = float(self._feh_kde(feh)[0])
+            if pdf <= 0:
+                return -np.inf
+            lnp += np.log(pdf)
+        elif self._feh_type in ("morton", "rave"):
+            pdf = self._feh_named_func(feh)
             if pdf <= 0:
                 return -np.inf
             lnp += np.log(pdf)

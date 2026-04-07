@@ -254,17 +254,24 @@ The default prior for the distance is a truncated normal drawn from the
 distance estimate from Gaia DR3 (matching ARIADNE's behavior). The default
 prior for [Fe/H] is uniform unless spectroscopic priors are found in APOGEE,
 GALAH, RAVE, LAMOST, or PASTEL, in which case a Gaussian prior is used
-automatically. The default prior for Av is a flat prior that ranges from 0 to
-the maximum line-of-sight value from the selected dustmap.
+automatically. The default prior for the age is flat in log(age). The default
+prior for Av is a flat prior that ranges from 0 to the maximum line-of-sight
+value from the selected dustmap.
 
 We offer customization on the priors as well:
 
-| Prior | Hyperparameters |
-| :------: | :----------: |
-| Fixed | value |
-| Normal | mean, std |
-| Uniform | ini, end |
-| Default | --- |
+| Prior | Hyperparameters | Notes |
+| :------: | :----------: | :---- |
+| Fixed | value | |
+| Normal | mean, std | |
+| Uniform | ini, end | |
+| Morton | --- | [Fe/H] only: 2-Gaussian local disk + halo (Casagrande+ 2011) |
+| RAVE | --- | [Fe/H] only: N(-0.125, 0.234) from RAVE DR5 |
+| Default | --- | |
+
+The `log_age` prior also accepts `'uniform'` to sample flat in linear age
+(rather than the default flat in log age). This upweights older ages and is
+the prior used by `isochrones` (Morton).
 
 So if you knew from a spectroscopic analysis that [Fe/H] = 0.09 +/- 0.05 and
 the star is nearby (< 70 pc) so you wanted to fix Av to 0, your prior
@@ -280,7 +287,16 @@ f.prior_setup = {
 }
 ```
 
-Though leaving everything at default usually works well enough.
+Or if you wanted to use population priors for [Fe/H] and age:
+
+```python
+f.prior_setup = {
+    'feh': ('morton'),       # 2-Gaussian SDSS disk + halo
+    'log_age': ('uniform'),  # flat in linear age
+}
+```
+
+Leaving everything at default usually works well enough.
 
 After having set up everything we can finally initialize the fitter and start
 fitting:

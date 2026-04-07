@@ -78,6 +78,7 @@ class Fitter:
         self._setup = ["dynesty"]
         self._prior_setup = None
         self._av_law = "fitzpatrick"
+        self._imf = "chabrier"
         self._eep_range = (200, 808)
         self._age_range = (8.0, 10.3)
         self._feh_range = (-2.0, 0.5)
@@ -209,6 +210,17 @@ class Fitter:
             raise InputError(f"Unknown Av law '{law}'. Available: {sorted(valid)}")
         self._av_law = law.lower()
 
+    @property
+    def imf(self) -> str:
+        return self._imf
+
+    @imf.setter
+    def imf(self, name: str):
+        valid = {"chabrier", "salpeter"}
+        if name.lower() not in valid:
+            raise InputError(f"Unknown IMF '{name}'. Available: {sorted(valid)}")
+        self._imf = name.lower()
+
     # --- Methods ---
 
     def initialize(self):
@@ -258,18 +270,38 @@ class Fitter:
         ps = self._prior_setup or {}
 
         # [Fe/H] prior priority:
-        #   1. User override in prior_setup (normal)
+        #   1. User override in prior_setup (normal, morton, rave)
         #   2. Full ARIADNE posterior samples (KDE) — preserves shape
         #   3. Spectroscopic prior from star.feh/feh_e (gaussian)
         #   4. Uniform (default)
         feh_prior = None
         feh_cfg = ps.get("feh") or ps.get("z")
-        if feh_cfg and isinstance(feh_cfg, tuple) and feh_cfg[0] == "normal":
-            feh_prior = ("gaussian", feh_cfg[1], feh_cfg[2])
-        elif getattr(self._star, "feh_posterior", None) is not None:
-            feh_prior = ("kde", self._star.feh_posterior)
-        elif self._star.feh is not None and self._star.feh_e is not None:
-            feh_prior = ("gaussian", self._star.feh, self._star.feh_e)
+        if feh_cfg and isinstance(feh_cfg, tuple):
+            if feh_cfg[0] == "normal":
+                feh_prior = ("gaussian", feh_cfg[1], feh_cfg[2])
+            elif feh_cfg[0] == "morton":
+                feh_prior = ("morton",)
+            elif feh_cfg[0] == "rave":
+                feh_prior = ("rave",)
+        elif feh_cfg and isinstance(feh_cfg, str):
+            if feh_cfg == "morton":
+                feh_prior = ("morton",)
+            elif feh_cfg == "rave":
+                feh_prior = ("rave",)
+        if feh_prior is None:
+            if getattr(self._star, "feh_posterior", None) is not None:
+                feh_prior = ("kde", self._star.feh_posterior)
+            elif self._star.feh is not None and self._star.feh_e is not None:
+                feh_prior = ("gaussian", self._star.feh, self._star.feh_e)
+
+        # Age prior: "log_uniform" (flat in log age, default) or
+        # "uniform" (flat in linear age, a la Morton/isochrones)
+        age_cfg = ps.get("log_age")
+        age_prior = "log_uniform"
+        if age_cfg and isinstance(age_cfg, tuple) and age_cfg[0] == "uniform":
+            age_prior = "uniform"
+        elif age_cfg and isinstance(age_cfg, str) and age_cfg == "uniform":
+            age_prior = "uniform"
 
         # Distance prior: truncated normal from BJ distance (like ARIADNE)
         dist_cfg = ps.get("dist")
@@ -333,11 +365,13 @@ class Fitter:
                 age_range=(grid_age_lo, grid_age_hi),
                 feh_range=(grid_feh_lo, grid_feh_hi),
                 feh_prior=feh_prior,
+                age_prior=age_prior,
                 bc_table=self._bc_table,
                 distance_prior=distance_prior,
                 av_range=av_range,
                 vini_range=vini_range,
                 binary=self._binary,
+                imf=self._imf,
                 external_kdes=external_kdes,
             )
 
@@ -362,13 +396,20 @@ class Fitter:
             if name == "eep":
                 print(colored(f"{t3}{'eep':12s}  U({p.eep_lo:.0f}, {p.eep_hi:.0f})", c))
             elif name == "log_age":
-                print(colored(f"{t3}{'log_age':12s}  U({p.age_lo:.2f}, {p.age_hi:.2f})", c))
+                if p._age_type == "uniform":
+                    print(colored(f"{t3}{'log_age':12s}  Flat in linear age ({p.age_lo:.2f}, {p.age_hi:.2f})", c))
+                else:
+                    print(colored(f"{t3}{'log_age':12s}  U({p.age_lo:.2f}, {p.age_hi:.2f})", c))
             elif name == "feh":
                 if p._feh_type == "gaussian":
                     print(colored(f"{t3}{'feh':12s}  N({p._feh_mean:.3f}, {p._feh_sigma:.3f})", c))
                 elif p._feh_type == "kde":
                     n = len(p._feh_cdf_x)
                     print(colored(f"{t3}{'feh':12s}  KDE (ARIADNE posterior, {n} grid pts)", c))
+                elif p._feh_type == "morton":
+                    print(colored(f"{t3}{'feh':12s}  Morton (2-Gaussian disk + halo)", c))
+                elif p._feh_type == "rave":
+                    print(colored(f"{t3}{'feh':12s}  RAVE DR5 N(-0.125, 0.234)", c))
                 else:
                     print(colored(f"{t3}{'feh':12s}  U({p.feh_lo:.2f}, {p.feh_hi:.2f})", c))
             elif name == "distance":
@@ -377,6 +418,8 @@ class Fitter:
                 print(colored(f"{t3}{'av':12s}  U({p.av_lo:.2f}, {p.av_hi:.2f})", c))
             elif name == "eep_secondary":
                 print(colored(f"{t3}{'eep_2nd':12s}  U({p.eep_lo:.0f}, eep_primary)", c))
+            elif name == "vini":
+                print(colored(f"{t3}{'vini':12s}  U({p.vini_lo:.2f}, {p.vini_hi:.2f})", c))
         print()
 
     def fit(self):
