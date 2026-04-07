@@ -301,6 +301,8 @@ class Star:
         feh_arr = _samples("feh", "z")
         rad_arr = _samples("radius", "rad")
         dist_arr = _samples("distance", "dist")
+        av_arr = _samples("Av", "av")
+        lum_arr = _samples("luminosity", "lum", "L")
 
         teff, teff_e = _summary(teff_arr)
         logg, logg_e = _summary(logg_arr)
@@ -331,16 +333,25 @@ class Star:
         star.radius = rad
         star.radius_e = rad_e
 
-        # Store posterior samples in two categories:
-        #
-        # 1. feh_posterior: sampled parameter → fed through prior transform
-        #    as a KDE-based inverse CDF, preserving full distribution shape.
-        # 2. external_posteriors (logg): derived grid quantity → evaluated
-        #    as a KDE penalty in the likelihood, since it isn't sampled.
+        # Store posterior samples:
+        # - feh_posterior → sampled parameter, fed through prior transform
+        #   as a KDE-based inverse CDF, preserving full distribution shape.
+        # - external_posteriors → KDE penalties in the likelihood for all
+        #   other available ARIADNE posteriors (grid-derived and sampled).
         star.feh_posterior = feh_arr  # full samples, not just mean/std
         star.external_posteriors = {}
+        if teff_arr is not None:
+            star.external_posteriors["Teff"] = teff_arr
         if logg_arr is not None:
             star.external_posteriors["log_g"] = logg_arr
+        if rad_arr is not None:
+            star.external_posteriors["radius"] = rad_arr
+        if dist_arr is not None:
+            star.external_posteriors["distance"] = dist_arr
+        if av_arr is not None:
+            star.external_posteriors["Av"] = av_arr
+        if lum_arr is not None:
+            star.external_posteriors["luminosity"] = lum_arr
 
         return star
 

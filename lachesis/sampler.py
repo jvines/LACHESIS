@@ -108,6 +108,13 @@ class IsochroneFitter:
                         val = predicted.get("log_g")
                     elif param == "radius":
                         val = predicted.get("radius")
+                    elif param == "luminosity":
+                        log_l = predicted.get("log_L")
+                        val = 10.0 ** log_l if log_l is not None and not np.isnan(log_l) else None
+                    elif param == "distance":
+                        val = distance
+                    elif param == "Av":
+                        val = av
                     else:
                         continue
                     if val is None or np.isnan(val):
