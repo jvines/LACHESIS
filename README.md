@@ -256,7 +256,12 @@ prior for [Fe/H] is uniform unless spectroscopic priors are found in APOGEE,
 GALAH, RAVE, LAMOST, or PASTEL, in which case a Gaussian prior is used
 automatically. The default prior for the age is flat in log(age). The default
 prior for Av is a flat prior that ranges from 0 to the maximum line-of-sight
-value from the selected dustmap.
+value from the selected dustmap. The EEP prior is weighted by the initial mass
+function (IMF) and the Jacobian |dM_ini/dEEP| — the default IMF is
+[Chabrier (2003)](https://ui.adsabs.harvard.edu/abs/2003PASP..115..763C/abstract),
+with [Kroupa (2001)](https://ui.adsabs.harvard.edu/abs/2001MNRAS.322..231K/abstract)
+and [Salpeter (1955)](https://ui.adsabs.harvard.edu/abs/1955ApJ...121..161S/abstract)
+available as alternatives.
 
 We offer customization on the priors as well:
 
