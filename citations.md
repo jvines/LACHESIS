@@ -71,6 +71,17 @@ archivePrefix = {arXiv},
        adsurl = {https://ui.adsabs.harvard.edu/abs/2004AIPC..735..395S},
       adsnote = {Provided by the SAO/NASA Astrophysics Data System}
 }
+
+@ARTICLE{2006BayAn...1..833S,
+       author = {{Skilling}, John},
+        title = "{Nested sampling for general Bayesian computation}",
+      journal = {Bayesian Analysis},
+         year = 2006,
+       volume = {1},
+       number = {4},
+        pages = {833-859},
+          doi = {10.1214/06-BA127},
+}
 ```
 
 ## Isochrone Grids
@@ -208,6 +219,67 @@ Cite the grids you use. The default BMA set uses MIST, PARSEC, Dartmouth, BaSTI,
 }
 ```
 
+## Initial Mass Function
+
+The default IMF is Chabrier (2003). Cite the one you use.
+
+### Chabrier (2003, default)
+
+```
+@ARTICLE{2003PASP..115..763C,
+       author = {{Chabrier}, Gilles},
+        title = "{Galactic Stellar and Substellar Initial Mass Function}",
+      journal = {\pasp},
+         year = 2003,
+        month = jul,
+       volume = {115},
+        pages = {763-795},
+          doi = {10.1086/376392},
+archivePrefix = {arXiv},
+       eprint = {astro-ph/0304382},
+ primaryClass = {astro-ph},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2003PASP..115..763C},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+```
+
+### Kroupa (2001, if used)
+
+```
+@ARTICLE{2001MNRAS.322..231K,
+       author = {{Kroupa}, Pavel},
+        title = "{On the variation of the initial mass function}",
+      journal = {\mnras},
+         year = 2001,
+        month = apr,
+       volume = {322},
+        pages = {231-246},
+          doi = {10.1046/j.1365-8711.2001.04022.x},
+archivePrefix = {arXiv},
+       eprint = {astro-ph/0009005},
+ primaryClass = {astro-ph},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2001MNRAS.322..231K},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+```
+
+### Salpeter (1955, if used)
+
+```
+@ARTICLE{1955ApJ...121..161S,
+       author = {{Salpeter}, Edwin E.},
+        title = "{The Luminosity Function and Stellar Evolution.}",
+      journal = {\apj},
+         year = 1955,
+        month = jan,
+       volume = {121},
+        pages = {161},
+          doi = {10.1086/145971},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/1955ApJ...121..161S},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+```
+
 ## Bolometric Corrections
 
 ```
@@ -336,20 +408,18 @@ Cite the catalog(s) that provided spectroscopic priors for your target. **LACHES
 }
 ```
 
-### LAMOST DR7
+### LAMOST DR11
 
 ```
-@ARTICLE{2015RAA....15.1095L,
+@MISC{2026yCat.5162....0L,
        author = {{Luo}, A.-L. and others},
-        title = "{The first data release (DR1) of the LAMOST regular survey}",
-      journal = {Research in Astronomy and Astrophysics},
-         year = 2015,
-       volume = {15},
-        pages = {1095},
-          doi = {10.1088/1674-4527/15/8/002},
-       adsurl = {https://ui.adsabs.harvard.edu/abs/2015RAA....15.1095L},
+        title = "{LAMOST DR11}",
+         year = 2026,
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2026yCat.5162....0L},
 }
 ```
+
+Paper in prep — update this entry when the reference is published.
 
 ### PASTEL
 
