@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from lachesis.prior import IsochonePrior
+from lachesis.prior import IsochonePrior, kroupa_imf
 
 
 class TestIsochonePrior:
@@ -87,12 +87,51 @@ class TestIsochonePrior:
             age_range=(5.0, 10.3),
             feh_range=(-4.0, 0.5),
         )
-        # Without dm_deep
+        # Without IMF weighting
         lnp1 = prior.log_prior(eep=400.0, log_age=9.0, feh=0.0)
-        # With dm_deep
-        lnp2 = prior.log_prior(eep=400.0, log_age=9.0, feh=0.0, dm_deep=0.01)
+        # With IMF weighting (needs both initial_mass and dm_deep)
+        lnp2 = prior.log_prior(
+            eep=400.0, log_age=9.0, feh=0.0,
+            initial_mass=1.0, dm_deep=0.01,
+        )
         # dm_deep > 0 should give a different prior
         assert lnp1 != lnp2
+
+    def test_kroupa_imf_continuity(self):
+        """Kroupa IMF must be continuous at the 0.08 and 0.5 Msun breakpoints."""
+        eps = 1e-10
+        # Continuity at 0.08
+        assert kroupa_imf(0.08 - eps) == pytest.approx(kroupa_imf(0.08), rel=1e-6)
+        # Continuity at 0.5
+        assert kroupa_imf(0.5 - eps) == pytest.approx(kroupa_imf(0.5), rel=1e-6)
+
+    def test_kroupa_imf_positive_and_decreasing(self):
+        """Kroupa IMF should be positive and decreasing for M > 0.08."""
+        masses = [0.1, 0.3, 0.5, 1.0, 2.0, 5.0]
+        vals = [kroupa_imf(m) for m in masses]
+        for v in vals:
+            assert v > 0
+        # Should be monotonically decreasing above the low-mass turnover
+        for i in range(len(vals) - 1):
+            assert vals[i] > vals[i + 1]
+
+    def test_kroupa_imf_zero_for_nonpositive(self):
+        assert kroupa_imf(0.0) == 0.0
+        assert kroupa_imf(-1.0) == 0.0
+
+    def test_kroupa_imf_selectable(self):
+        """Kroupa IMF should be selectable via the imf kwarg."""
+        prior = IsochonePrior(
+            eep_range=(1, 808),
+            age_range=(5.0, 10.3),
+            feh_range=(-4.0, 0.5),
+            imf="kroupa",
+        )
+        lnp = prior.log_prior(
+            eep=400.0, log_age=9.0, feh=0.0,
+            initial_mass=1.0, dm_deep=0.01,
+        )
+        assert np.isfinite(lnp)
 
     def test_param_names(self):
         prior = IsochonePrior(

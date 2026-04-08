@@ -32,9 +32,27 @@ def chabrier_imf(mass: float) -> float:
     return 0.0443 * mass ** (-2.3)
 
 
+def kroupa_imf(mass: float) -> float:
+    """Kroupa (2001) IMF: broken power-law with continuity at breakpoints.
+
+    ξ(M) ∝ M^{-α_i} with α = 0.3, 1.3, 2.3 for the three mass segments.
+    Normalisation constants enforce continuity at 0.08 and 0.5 Msun.
+    """
+    if mass <= 0:
+        return 0.0
+    if mass < 0.08:
+        return mass ** (-0.3)
+    if mass < 0.5:
+        # continuity at 0.08: k1 * 0.08^-1.3 = 0.08^-0.3  =>  k1 = 0.08
+        return 0.08 * mass ** (-1.3)
+    # continuity at 0.5: k2 * 0.5^-2.3 = 0.08 * 0.5^-1.3  =>  k2 = 0.08 * 0.5
+    return 0.04 * mass ** (-2.3)
+
+
 _IMF_FUNCTIONS = {
     "salpeter": salpeter_imf,
     "chabrier": chabrier_imf,
+    "kroupa": kroupa_imf,
 }
 
 
