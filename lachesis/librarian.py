@@ -397,6 +397,7 @@ class Librarian:
         self._query_crossmatches()
         self._query_bailer_jones()
         self._fetch_photometry()
+        self._impute_zero_errors()
         self._query_spectroscopic_priors()
         self._query_extinction()
 
@@ -1079,13 +1080,13 @@ class Librarian:
     def _query_spectroscopic_priors(self):
         """Try spectroscopic catalogs in priority order; stop at first match.
 
-        Priority: APOGEE DR17 > GALAH DR3 > RAVE DR6 > LAMOST DR8 > PASTEL.
+        Priority: APOGEE DR17 > GALAH DR3 > RAVE DR6 > LAMOST DR11 > PASTEL.
         """
         for query_fn, source_name in [
             (self._query_apogee, "APOGEE_DR17"),
             (self._query_galah, "GALAH_DR3"),
             (self._query_rave, "RAVE_DR6"),
-            (self._query_lamost, "LAMOST_DR8"),
+            (self._query_lamost, "LAMOST_DR11"),
             (self._query_pastel, "PASTEL"),
         ]:
             result = query_fn()
@@ -1220,14 +1221,14 @@ class Librarian:
             return None
 
     def _query_lamost(self) -> dict | None:
-        """Query LAMOST DR8 stellar parameters via VizieR (V/164).
+        """Query LAMOST DR11 stellar parameters via VizieR (V/164).
 
         Crossmatches via positional cone search since LAMOST has no
         pre-matched Gaia source_id. Requires SNR_g > 30.
         """
         try:
             cats = Vizier.query_region(
-                self._coord, radius=self._search_radius, catalog="V/164/dr8"
+                self._coord, radius=self._search_radius, catalog="V/162"
             )
             if not cats or len(cats[0]) == 0:
                 return None
@@ -1259,7 +1260,7 @@ class Librarian:
                 "feh_err": float(feh_e) if feh_e is not None else 0.1,
             }
         except Exception as e:
-            logger.warning("LAMOST DR8 query failed: %s", e)
+            logger.warning("LAMOST DR11 query failed: %s", e)
             return None
 
     def _query_pastel(self) -> dict | None:
@@ -1317,6 +1318,31 @@ class Librarian:
             self.Av = None
 
     # ── Helpers ──────────────────────────────────────────────────
+
+    def _impute_zero_errors(self):
+        """Impute errors for zero-error bands (matching ARIADNE).
+
+        Computes the maximum relative flux error from bands with valid
+        errors, adds 0.1, and assigns that relative error to zero-error
+        bands. This mirrors ARIADNE's Star.extract_info() logic where
+        mx_rel_er = max(flux_er / flux) + 0.1.
+        """
+        _LN10x04 = 0.4 * np.log(10)  # ≈ 0.9210
+
+        good_rel = []
+        for _band, (_mag, err) in self._magnitudes.items():
+            if err > 0:
+                good_rel.append(_LN10x04 * err)
+
+        if not good_rel:
+            return
+
+        mx_rel = max(good_rel) + 0.1
+        imputed = mx_rel / _LN10x04
+
+        for band, (mag, err) in list(self._magnitudes.items()):
+            if err <= 0:
+                self._magnitudes[band] = (mag, imputed)
 
     def _add_mag(self, pyphot_name, mag, err):
         """Add magnitude. First-write-wins (catalog priority by query order)."""
