@@ -1,17 +1,9 @@
 """Star class — holds observed stellar properties for isochrone fitting."""
 
 import numpy as np
-from scipy.constants import h as _h, c as _c, k as _k
 
 from lachesis.display import display_banner
 from lachesis.error import InputError
-
-
-def _planck_mag(lam_m, T):
-    """Planck function in magnitude space (arbitrary zero-point)."""
-    x = _h * _c / (lam_m * _k * np.maximum(T, 1.0))
-    flux = 1.0 / (lam_m ** 3 * (np.exp(np.clip(x, 0, 500)) - 1.0))
-    return -2.5 * np.log10(np.maximum(flux, 1e-300))
 
 
 class Star:
@@ -378,21 +370,44 @@ class Star:
 
     # --- Blackbody photometry QC ---
 
+    _GAIA_PREFIXES = ("Gaia_", "GaiaDR")
+
     def _blackbody_check(self, sigma=5.0, err_floor=0.05):
-        """Flag photometry outliers via a blackbody consensus fit.
+        """Iterative photometric outlier detection via BC table model.
 
-        Fits a Planck function in magnitude space across all bands.
-        Bands with normalized residuals > sigma are flagged with a
-        warning but NOT removed.
+        Uses bolometric correction tables (proper synthetic photometry
+        with correct per-filter zero points) instead of a monochromatic
+        blackbody, eliminating false positives from system zero-point
+        differences.
+
+        Seeds the trusted set from Gaia anchors (BP/G/RP), then
+        iteratively promotes the best-fitting untrusted band if its
+        residual is within *sigma*. Bands never promoted are flagged.
+
+        Falls back to iterative worst-outlier removal when no Gaia
+        bands are present.
         """
-        from lachesis.filters import FILTER_WAVELENGTH
+        from lachesis.filters import FILTER_WAVELENGTH, PYPHOT_TO_BC
 
-        bands, wavelengths, mags, errs = [], [], [], []
+        # Load BC table for synthetic photometry
+        try:
+            from lachesis.bc import BCTable
+            from lachesis.config import BC_DIR
+            bc = BCTable.multi_system(BC_DIR)
+        except (FileNotFoundError, ImportError):
+            self._bb_teff = None
+            self._bb_residuals = {}
+            return
+
+        # Collect bands with valid errors AND BC table coverage
+        bands, bc_names, wavelengths, mags, errs = [], [], [], [], []
         for b, (m, e) in self.magnitudes.items():
+            bc_name = PYPHOT_TO_BC.get(b)
             lam = FILTER_WAVELENGTH.get(b)
-            if lam is not None and e > 0:
+            if bc_name is not None and bc_name in bc._band_indices and lam is not None and e > 0:
                 bands.append(b)
-                wavelengths.append(lam * 1e-6)  # microns → metres
+                bc_names.append(bc_name)
+                wavelengths.append(lam)
                 mags.append(m)
                 errs.append(max(e, err_floor))
 
@@ -401,40 +416,101 @@ class Star:
             self._bb_residuals = {}
             return
 
+        bands = np.array(bands)
         wavelengths = np.array(wavelengths)
         mags = np.array(mags)
         errs = np.array(errs)
 
-        # Grid search for best-fit temperature
-        temps = np.linspace(2000, 60000, 300)
-        best_rss = np.inf
-        best_T = 5000.0
-        best_offset = 0.0
+        bc.set_active_bands(bc_names)
 
-        for T in temps:
-            pred = _planck_mag(wavelengths, T)
-            offset = np.mean(mags - pred)
-            resid = (mags - (pred + offset)) / errs
-            rss = np.sum(resid ** 2)
-            if rss < best_rss:
-                best_rss = rss
-                best_T = T
-                best_offset = offset
+        # Build model magnitude grid: pred = -BC(Teff) + offset
+        # Mbol cancels in the offset, so relative mags are just -BC
+        teff_grid = bc.teff_values
+        # Pre-compute BC vectors for each temperature
+        bc_vectors = np.full((len(teff_grid), len(bands)), np.nan)
+        for ti, T in enumerate(teff_grid):
+            bcs = bc.get_bc(T, 4.5, 0.0, 0.0)
+            for bi, bn in enumerate(bc_names):
+                v = bcs.get(bn)
+                if v is not None:
+                    bc_vectors[ti, bi] = -v
 
-        # Compute per-band residuals at best T
-        pred = _planck_mag(wavelengths, best_T) + best_offset
+        def _fit_residuals(fit_idx):
+            """Best-fit BC model residuals using only fit_idx bands."""
+            if len(fit_idx) < 2:
+                return np.full(len(mags), np.inf), 5000.0, 0.0
+            best_resid = np.full(len(mags), np.inf)
+            best_rss = np.inf
+            best_T, best_off = 5000.0, 0.0
+            for ti in range(len(teff_grid)):
+                model = bc_vectors[ti]
+                if np.any(np.isnan(model[fit_idx])):
+                    continue
+                offset = np.nanmean(mags[fit_idx] - model[fit_idx])
+                resid = np.abs(mags - (model + offset))
+                rss = np.nansum(resid[fit_idx] ** 2)
+                if rss < best_rss:
+                    best_rss = rss
+                    best_resid = resid
+                    best_T = teff_grid[ti]
+                    best_off = offset
+            return best_resid, best_T, best_off
+
+        # Iterative acceptance seeded from Gaia anchors
+        gaia_mask = np.array([
+            any(b.startswith(p) for p in self._GAIA_PREFIXES) for b in bands
+        ])
+
+        if np.any(gaia_mask):
+            trusted = gaia_mask.copy()
+            while True:
+                untrusted_idx = np.where(~trusted)[0]
+                if len(untrusted_idx) == 0:
+                    break
+                resid, _, _ = _fit_residuals(np.where(trusted)[0])
+                z = resid / errs
+                best = untrusted_idx[np.argmin(z[untrusted_idx])]
+                if z[best] < sigma:
+                    trusted[best] = True
+                else:
+                    break
+            outlier_mask = ~trusted
+        else:
+            # No Gaia: iterative worst-outlier removal
+            active = np.ones(len(bands), dtype=bool)
+            while True:
+                active_idx = np.where(active)[0]
+                if len(active_idx) < 4:
+                    break
+                resid, _, _ = _fit_residuals(active_idx)
+                z = resid / errs
+                worst = active_idx[np.argmax(z[active_idx])]
+                if z[worst] >= sigma:
+                    active[worst] = False
+                else:
+                    break
+            outlier_mask = ~active
+
+        # Final fit using all trusted bands
+        trusted_idx = np.where(~outlier_mask)[0]
+        _, best_T, best_offset = _fit_residuals(trusted_idx)
+
+        # Find the best-fit BC vector for the final plot
+        ti_best = np.argmin(np.abs(teff_grid - best_T))
+        pred = bc_vectors[ti_best] + best_offset
+
         self._bb_teff = best_T
         self._bb_offset = best_offset
         self._bb_residuals = {}
         flagged = []
 
         for i, b in enumerate(bands):
-            z = abs(mags[i] - pred[i]) / errs[i]
+            z = abs(mags[i] - pred[i]) / errs[i] if not np.isnan(pred[i]) else 0.0
             self._bb_residuals[b] = (
-                wavelengths[i] * 1e6,  # back to microns for plotting
+                wavelengths[i],  # microns
                 mags[i], pred[i], z,
             )
-            if z > sigma:
+            if outlier_mask[i]:
                 flagged.append((b, z))
 
         if flagged:
@@ -445,89 +521,6 @@ class Star:
                     f"({z:.1f}sigma from blackbody fit) -- not removed",
                     "yellow",
                 ))
-
-    def plot_blackbody(self, outfile=None):
-        """Diagnostic plot: blackbody fit with color-coded photometry.
-
-        Parameters
-        ----------
-        outfile : str, optional
-            Save path. If None, calls plt.show().
-        """
-        import matplotlib.pyplot as plt
-        from matplotlib.colors import LogNorm
-
-        if not getattr(self, "_bb_residuals", None):
-            print("No blackbody check results — call _blackbody_check() first.")
-            return
-
-        fig, (ax_main, ax_res) = plt.subplots(
-            2, 1, figsize=(8, 6), height_ratios=[3, 1],
-            sharex=True, gridspec_kw={"hspace": 0.05},
-        )
-
-        # Collect data
-        bands = list(self._bb_residuals.keys())
-        lams = np.array([self._bb_residuals[b][0] for b in bands])
-        obs = np.array([self._bb_residuals[b][1] for b in bands])
-        pred = np.array([self._bb_residuals[b][2] for b in bands])
-        zvals = np.array([self._bb_residuals[b][3] for b in bands])
-        errs_raw = np.array([
-            max(self.magnitudes[b][1], 0.05) for b in bands
-        ])
-
-        # Wavelength colormap
-        cmap = plt.cm.Spectral_r
-        norm = LogNorm(vmin=max(lams.min(), 0.1), vmax=lams.max())
-
-        # Smooth blackbody curve
-        lam_fine = np.geomspace(lams.min() * 0.8, lams.max() * 1.2, 500)
-        bb_fine = _planck_mag(lam_fine * 1e-6, self._bb_teff) + self._bb_offset
-        ax_main.plot(lam_fine, bb_fine, "k-", lw=1, alpha=0.5, zorder=1)
-
-        # Plot each band
-        for i, b in enumerate(bands):
-            color = cmap(norm(lams[i]))
-            marker = "o"
-            edgecolor = color
-            if zvals[i] > 5.0:
-                marker = "s"
-                edgecolor = "red"
-            ax_main.errorbar(
-                lams[i], obs[i], yerr=errs_raw[i],
-                fmt=marker, color=color, mec=edgecolor, mew=1.5,
-                ms=7, capsize=2, zorder=3, label=b,
-            )
-            # Residuals
-            ax_res.scatter(
-                lams[i], (obs[i] - pred[i]) / errs_raw[i],
-                c=[color], marker=marker, edgecolors=edgecolor,
-                linewidths=1.5, s=50, zorder=3,
-            )
-
-        ax_main.invert_yaxis()
-        ax_main.set_ylabel("Magnitude")
-        ax_main.set_title(
-            f"{self.starname}  —  $T_{{\\rm bb}}$ = {self._bb_teff:.0f} K"
-        )
-        ax_main.legend(
-            fontsize=6, ncol=3, loc="upper right",
-            framealpha=0.7,
-        )
-
-        ax_res.axhline(0, color="k", lw=0.5)
-        ax_res.axhline(5, color="r", lw=0.5, ls="--", alpha=0.5)
-        ax_res.axhline(-5, color="r", lw=0.5, ls="--", alpha=0.5)
-        ax_res.set_xlabel("Wavelength ($\\mu$m)")
-        ax_res.set_ylabel("Residual ($\\sigma$)")
-        ax_res.set_xscale("log")
-
-        fig.tight_layout()
-        if outfile:
-            fig.savefig(outfile, dpi=300, bbox_inches="tight")
-            plt.close(fig)
-        else:
-            plt.show()
 
     @property
     def observed(self) -> dict[str, float]:
