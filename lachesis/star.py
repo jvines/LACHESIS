@@ -147,9 +147,9 @@ class Star:
         if self.Av is None:
             self._query_extinction(dustmap)
 
-        # Blackbody QC: flag photometry outliers (warn only, no removal)
+        # Photometry QC: flag outliers (warn only, no removal)
         if self.magnitudes:
-            self._blackbody_check()
+            self._photometry_check()
 
     _DUSTMAPS = {
         'SFD': ('dustmaps.sfd', 'SFDQuery'),
@@ -368,17 +368,16 @@ class Star:
             mag, err = self.magnitudes[b]
             print(f"  {b:25s}  {mag:7.3f} +/- {err:.3f}")
 
-    # --- Blackbody photometry QC ---
+    # --- Photometry QC ---
 
     _GAIA_PREFIXES = ("Gaia_", "GaiaDR")
 
-    def _blackbody_check(self, sigma=5.0, err_floor=0.05):
+    def _photometry_check(self, sigma=5.0, err_floor=0.05):
         """Iterative photometric outlier detection via BC table model.
 
         Uses bolometric correction tables (proper synthetic photometry
-        with correct per-filter zero points) instead of a monochromatic
-        blackbody, eliminating false positives from system zero-point
-        differences.
+        with correct per-filter zero points), eliminating false positives
+        from system zero-point differences.
 
         Seeds the trusted set from Gaia anchors (BP/G/RP), then
         iteratively promotes the best-fitting untrusted band if its
@@ -395,8 +394,8 @@ class Star:
             from lachesis.config import BC_DIR
             bc = BCTable.multi_system(BC_DIR)
         except (FileNotFoundError, ImportError):
-            self._bb_teff = None
-            self._bb_residuals = {}
+            self._phot_teff = None
+            self._phot_residuals = {}
             return
 
         # Collect bands with valid errors AND BC table coverage
@@ -412,8 +411,8 @@ class Star:
                 errs.append(max(e, err_floor))
 
         if len(bands) < 3:
-            self._bb_teff = None
-            self._bb_residuals = {}
+            self._phot_teff = None
+            self._phot_residuals = {}
             return
 
         bands = np.array(bands)
@@ -499,14 +498,14 @@ class Star:
         ti_best = np.argmin(np.abs(teff_grid - best_T))
         pred = bc_vectors[ti_best] + best_offset
 
-        self._bb_teff = best_T
-        self._bb_offset = best_offset
-        self._bb_residuals = {}
+        self._phot_teff = best_T
+        self._phot_offset = best_offset
+        self._phot_residuals = {}
         flagged = []
 
         for i, b in enumerate(bands):
             z = abs(mags[i] - pred[i]) / errs[i] if not np.isnan(pred[i]) else 0.0
-            self._bb_residuals[b] = (
+            self._phot_residuals[b] = (
                 wavelengths[i],  # microns
                 mags[i], pred[i], z,
             )
@@ -518,11 +517,11 @@ class Star:
             for b, z in flagged:
                 print(colored(
                     f"\t\t\tWARNING: {b} is potentially problematic "
-                    f"({z:.1f}sigma from blackbody fit) -- not removed",
+                    f"({z:.1f}sigma from photometry consensus fit) -- not removed",
                     "yellow",
                 ))
 
-    def plot_blackbody(self, outfile=None):
+    def plot_photometry(self, outfile=None):
         """Diagnostic plot: BC-model fit with color-coded photometry.
 
         Parameters
@@ -537,7 +536,7 @@ class Star:
         plt.rcParams["font.family"] = "serif"
         plt.rcParams["mathtext.fontset"] = "dejavuserif"
 
-        if not getattr(self, "_bb_residuals", None):
+        if not getattr(self, "_phot_residuals", None):
             print("No photometry QC results available.")
             return
 
@@ -547,11 +546,11 @@ class Star:
         )
 
         # Collect data
-        bands = list(self._bb_residuals.keys())
-        lams = np.array([self._bb_residuals[b][0] for b in bands])
-        obs = np.array([self._bb_residuals[b][1] for b in bands])
-        pred = np.array([self._bb_residuals[b][2] for b in bands])
-        zvals = np.array([self._bb_residuals[b][3] for b in bands])
+        bands = list(self._phot_residuals.keys())
+        lams = np.array([self._phot_residuals[b][0] for b in bands])
+        obs = np.array([self._phot_residuals[b][1] for b in bands])
+        pred = np.array([self._phot_residuals[b][2] for b in bands])
+        zvals = np.array([self._phot_residuals[b][3] for b in bands])
         errs_raw = np.array([
             max(self.magnitudes[b][1], 0.05) for b in bands
         ])
@@ -591,7 +590,7 @@ class Star:
         ax_main.invert_yaxis()
         ax_main.set_ylabel("Magnitude")
         ax_main.set_title(
-            f"{self.starname}  —  $T_{{\\rm fit}}$ = {self._bb_teff:.0f} K"
+            f"{self.starname}  —  $T_{{\\rm fit}}$ = {self._phot_teff:.0f} K"
         )
         ax_main.legend(
             fontsize=6, ncol=3, loc=0,
