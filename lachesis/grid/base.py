@@ -39,3 +39,71 @@ class IsochroneGrid(Protocol):
     ) -> dict[str, float]:
         """Interpolate grid at (EEP, log_age, [Fe/H]) → observables."""
         ...
+
+
+def _reconstruct_sparse(f) -> np.ndarray:
+    """Reconstruct a dense NaN-padded array from sparse_v1 format."""
+    shape = tuple(f.attrs["shape"])
+    values = f["values"][:]
+    offsets = f["offsets"][:]
+    lengths = f["lengths"][:]
+
+    n_eep = shape[-2]
+    n_col = shape[-1]
+    n_slices = len(offsets)
+    flat = np.full((n_slices, n_eep, n_col), np.nan, dtype=values.dtype)
+
+    pos = 0
+    for i in range(n_slices):
+        length = int(lengths[i])
+        if length == 0:
+            continue
+        offset = int(offsets[i])
+        flat[i, offset : offset + length, :] = values[pos : pos + length]
+        pos += length
+
+    return flat.reshape(shape)
+
+
+def load_grid_hdf5(path):
+    """Load a grid HDF5 file, handling both dense and sparse_v1 formats.
+
+    Returns (data, feh_values, age_values, eep_values, columns).
+    """
+    import h5py
+    from pathlib import Path
+
+    with h5py.File(Path(path), "r") as f:
+        feh_values = f["feh_values"][:]
+        age_values = f["age_values"][:]
+        eep_values = f["eep_values"][:]
+        columns = list(f.attrs.get("columns", []))
+
+        storage = f.attrs.get("storage", "dense")
+        if storage == "sparse_v1":
+            data = _reconstruct_sparse(f)
+        else:
+            data = f["data"][:]
+
+    return data, feh_values, age_values, eep_values, columns
+
+
+def load_grid_hdf5_starevol(path):
+    """Like load_grid_hdf5 but also returns vini_values for STAREVOL."""
+    import h5py
+    from pathlib import Path
+
+    with h5py.File(Path(path), "r") as f:
+        feh_values = f["feh_values"][:]
+        vini_values = f["vini_values"][:]
+        age_values = f["age_values"][:]
+        eep_values = f["eep_values"][:]
+        columns = list(f.attrs.get("columns", []))
+
+        storage = f.attrs.get("storage", "dense")
+        if storage == "sparse_v1":
+            data = _reconstruct_sparse(f)
+        else:
+            data = f["data"][:]
+
+    return data, feh_values, vini_values, age_values, eep_values, columns

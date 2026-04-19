@@ -238,13 +238,8 @@ class BaSTIModelGrid:
 
     @classmethod
     def from_hdf5(cls, path: str | Path) -> "BaSTIModelGrid":
-        import h5py
+        from lachesis.grid.base import load_grid_hdf5
 
         obj = object.__new__(cls)
-        with h5py.File(path, "r") as f:
-            obj._data = f["data"][:]
-            obj._feh_values = f["feh_values"][:]
-            obj._age_values = f["age_values"][:]
-            obj._eep_values = f["eep_values"][:]
-            obj._COLUMNS = list(f.attrs["columns"])
+        obj._data, obj._feh_values, obj._age_values, obj._eep_values, obj._COLUMNS = load_grid_hdf5(path)
         return obj

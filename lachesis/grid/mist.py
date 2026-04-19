@@ -240,15 +240,10 @@ class MISTGrid:
 
     @classmethod
     def from_hdf5(cls, path: str | Path) -> "MISTGrid":
-        import h5py
+        from lachesis.grid.base import load_grid_hdf5
 
         obj = object.__new__(cls)
-        with h5py.File(path, "r") as f:
-            obj._data = f["data"][:]
-            obj._feh_values = f["feh_values"][:]
-            obj._age_values = f["age_values"][:]
-            obj._eep_values = f["eep_values"][:]
-            obj._columns = list(f.attrs["columns"])
+        obj._data, obj._feh_values, obj._age_values, obj._eep_values, obj._columns = load_grid_hdf5(path)
         return obj
 
 
@@ -403,15 +398,10 @@ class MISTModelGrid:
 
     @classmethod
     def from_hdf5(cls, path: str | Path) -> "MISTModelGrid":
-        import h5py
+        from lachesis.grid.base import load_grid_hdf5
 
         obj = object.__new__(cls)
-        with h5py.File(path, "r") as f:
-            obj._data = f["data"][:]
-            obj._feh_values = f["feh_values"][:]
-            obj._age_values = f["age_values"][:]
-            obj._eep_values = f["eep_values"][:]
-            obj._columns = list(f.attrs["columns"])
+        obj._data, obj._feh_values, obj._age_values, obj._eep_values, obj._columns = load_grid_hdf5(path)
         return obj
 
 
