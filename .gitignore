@@ -28,4 +28,4 @@ __pycache__/
 *.pyc
 .venv/
 uv.lock
-test_output/
+test_output*/
