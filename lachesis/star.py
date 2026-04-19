@@ -522,6 +522,99 @@ class Star:
                     "yellow",
                 ))
 
+    def plot_blackbody(self, outfile=None):
+        """Diagnostic plot: BC-model fit with color-coded photometry.
+
+        Parameters
+        ----------
+        outfile : str, optional
+            Save path. If None, calls plt.show().
+        """
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as ticker
+        from matplotlib.colors import LogNorm
+
+        plt.rcParams["font.family"] = "serif"
+        plt.rcParams["mathtext.fontset"] = "dejavuserif"
+
+        if not getattr(self, "_bb_residuals", None):
+            print("No photometry QC results available.")
+            return
+
+        fig, (ax_main, ax_res) = plt.subplots(
+            2, 1, figsize=(8, 6), height_ratios=[3, 1],
+            sharex=True, gridspec_kw={"hspace": 0.05},
+        )
+
+        # Collect data
+        bands = list(self._bb_residuals.keys())
+        lams = np.array([self._bb_residuals[b][0] for b in bands])
+        obs = np.array([self._bb_residuals[b][1] for b in bands])
+        pred = np.array([self._bb_residuals[b][2] for b in bands])
+        zvals = np.array([self._bb_residuals[b][3] for b in bands])
+        errs_raw = np.array([
+            max(self.magnitudes[b][1], 0.05) for b in bands
+        ])
+
+        # Wavelength colormap
+        cmap = plt.cm.Spectral_r
+        norm = LogNorm(vmin=max(lams.min(), 0.1), vmax=lams.max())
+
+        # Model curve: connect predicted magnitudes sorted by wavelength
+        order = np.argsort(lams)
+        valid = ~np.isnan(pred[order])
+        ax_main.plot(
+            lams[order][valid], pred[order][valid],
+            "k-", lw=1, alpha=0.4, zorder=1,
+        )
+
+        # Plot each band
+        for i, b in enumerate(bands):
+            color = cmap(norm(lams[i]))
+            marker = "o"
+            edgecolor = color
+            if zvals[i] > 5.0:
+                marker = "s"
+                edgecolor = "red"
+            ax_main.errorbar(
+                lams[i], obs[i], yerr=errs_raw[i],
+                fmt=marker, color=color, mec=edgecolor, mew=1.5,
+                ms=7, capsize=2, zorder=3, label=b,
+            )
+            # Residuals
+            ax_res.scatter(
+                lams[i], (obs[i] - pred[i]) / errs_raw[i],
+                c=[color], marker=marker, edgecolors=edgecolor,
+                linewidths=1.5, s=50, zorder=3,
+            )
+
+        ax_main.invert_yaxis()
+        ax_main.set_ylabel("Magnitude")
+        ax_main.set_title(
+            f"{self.starname}  —  $T_{{\\rm fit}}$ = {self._bb_teff:.0f} K"
+        )
+        ax_main.legend(
+            fontsize=6, ncol=3, loc=0,
+            framealpha=0.7,
+        )
+
+        ax_res.axhline(0, color="k", lw=0.5)
+        ax_res.axhline(5, color="r", lw=0.5, ls="--", alpha=0.5)
+        ax_res.axhline(-5, color="r", lw=0.5, ls="--", alpha=0.5)
+        ax_res.set_xlabel("Wavelength ($\\mu$m)")
+        ax_res.set_ylabel("Residual ($\\sigma$)")
+        ax_res.set_xscale("log")
+        ax_res.xaxis.set_major_formatter(ticker.ScalarFormatter())
+        ax_res.xaxis.set_minor_formatter(ticker.ScalarFormatter())
+        ax_res.ticklabel_format(axis="x", style="plain")
+
+        fig.tight_layout()
+        if outfile:
+            fig.savefig(outfile, dpi=300, bbox_inches="tight")
+            plt.close(fig)
+        else:
+            plt.show()
+
     @property
     def observed(self) -> dict[str, float]:
         """Observable dict for the likelihood, translated to grid column names."""
