@@ -33,5 +33,14 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["lachesis"]
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "lachesis-grids",
+    ".claude",
+    "test_*.py",
+    "scripts",
+    "docs",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
