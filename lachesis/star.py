@@ -257,15 +257,19 @@ class Star:
     @classmethod
     def from_ariadne(cls, nc_path: str, starname: str | None = None,
                      ra: float | None = None, dec: float | None = None,
-                     g_id: int | None = None, verbose: bool = True):
+                     g_id: int | None = None, magnitudes: dict | None = None,
+                     verbose: bool = True):
         """Load stellar properties from an ARIADNE InferenceData .nc file.
 
         Stores full posterior sample arrays as external priors for the
         isochrone fit. The Fitter builds KDEs from these automatically.
 
-        If ra/dec are provided, photometry is retrieved via the Librarian
-        so that the isochrone fit uses both the ARIADNE priors AND the
-        photometric data (no double-counting — see docs).
+        Parameters
+        ----------
+        magnitudes : dict, optional
+            Pre-fetched photometry ``{band: (mag, err)}``. If provided,
+            skips the Librarian VizieR lookup (avoids redundant query when
+            photometry is already available from the ARIADNE preview).
         """
         import arviz as az
 
@@ -303,9 +307,10 @@ class Star:
         dist, dist_e = _summary(dist_arr)
 
         if ra is not None and dec is not None:
-            # Retrieve photometry via Librarian, use ARIADNE priors on top
+            # Use provided magnitudes or retrieve via Librarian
             star = cls(
                 starname, ra, dec, g_id=g_id,
+                magnitudes=magnitudes,
                 logg=logg, logg_e=logg_e,
                 feh=feh, feh_e=feh_e,
                 verbose=verbose,
