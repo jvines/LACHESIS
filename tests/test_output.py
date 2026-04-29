@@ -9,13 +9,15 @@ from lachesis.grid.mist import MISTModelGrid
 from lachesis.interp import GridInterpolator
 from lachesis.sampler import IsochroneFitter
 
-FULL_GRID_H5 = Path(__file__).parents[2] / "data" / "mist" / "grids" / "mist_v1.2_vvcrit0.4.h5"
+from tests.conftest import mist_h5_path
+
+FULL_GRID_H5 = mist_h5_path()
 
 
 @pytest.fixture(scope="module")
 def fit_result():
-    if not FULL_GRID_H5.exists():
-        pytest.skip("Full grid not built yet")
+    if FULL_GRID_H5 is None:
+        pytest.skip("MIST grid not available; install lachesis-grids or set LACHESIS_GRID_DIR")
     mg = MISTModelGrid.from_hdf5(FULL_GRID_H5)
     interp = GridInterpolator(mg)
     fitter = IsochroneFitter(
@@ -51,7 +53,9 @@ class TestArvizOutput:
     def test_has_derived_in_posterior(self, fit_result):
         from lachesis.output import to_inference_data
         idata = to_inference_data(fit_result)
-        for key in ["initial_mass", "Teff", "log_g", "radius"]:
+        # Note: output renames log_g -> logg / log_L -> logL on disk to
+        # match the ARIADNE / arviz ecosystem convention.
+        for key in ["initial_mass", "Teff", "logg", "radius"]:
             assert key in idata.posterior, f"Missing {key} in posterior"
 
     def test_save_and_load_nc(self, fit_result, tmp_path):
@@ -68,8 +72,9 @@ class TestArvizOutput:
         assert "eep" in idata2.posterior
         assert "initial_mass" in idata2.posterior
 
-    def test_has_sample_stats(self, fit_result):
+    def test_log_evidence_in_attrs(self, fit_result):
         from lachesis.output import to_inference_data
         idata = to_inference_data(fit_result)
-        assert hasattr(idata, "sample_stats")
-        assert "log_evidence" in idata.sample_stats.attrs
+        # log_evidence is stored on the InferenceData attrs (and per-grid
+        # in constant_data for BMA), not on a sample_stats group.
+        assert "log_evidence" in idata.attrs

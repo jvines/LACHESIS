@@ -7,7 +7,9 @@ import pytest
 
 from lachesis.bma import BMAResult, bayesian_model_average
 
-FULL_GRID_H5 = Path(__file__).parents[2] / "data" / "mist" / "grids" / "mist_v1.2_vvcrit0.4.h5"
+from tests.conftest import mist_h5_path
+
+FULL_GRID_H5 = mist_h5_path()
 
 
 class TestBMA:

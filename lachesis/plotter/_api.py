@@ -1,199 +1,40 @@
-"""Plotting for LACHESIS isochrone fitting results.
+"""ISOPlotter API class.
 
-ARIADNE-style plots: corner, HR diagram, BMA histograms, mass-age,
-model weights, summary panels, and LaTeX table output.
-
-All plots use matplotlib only (no seaborn, no corner package).
-Style matches astroARIADNE conventions (fontname=serif, fontsize=26,
-tick_labelsize=22, gaussian_kde overlays, LineCollection HR tracks).
+The bulk of the rendering implementation lives here; pure helpers and
+constants live in sibling modules ._helpers and ._constants.
 """
 
 __all__ = ["ISOPlotter"]
 
-import warnings
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import LineCollection
-from matplotlib.colors import LinearSegmentedColormap, to_rgba
 from matplotlib.gridspec import GridSpec
-from scipy.stats import gaussian_kde
 
 from lachesis.bma import BMAResult
 
-# -----------------------------------------------------------------------
-# Module-level constants
-# -----------------------------------------------------------------------
-
-# Per-model colors (same as ARIADNE BMA palette)
-_MODEL_COLORS = [
-    "tab:blue", "tab:orange", "tab:green", "tab:red",
-    "tab:purple", "tab:brown",
-]
-
-# Default parameters for corner / to_latex.
-# Note: we report the *current* stellar mass (`mass`, which comes from the
-# grid's `star_mass` column), not `initial_mass`. For main-sequence stars
-# they're nearly identical, but for evolved stars (RGB/AGB) they differ due
-# to mass loss, and the current mass is what astronomers want reported.
-_DEFAULT_CORNER_PARAMS = [
-    "mass", "Teff", "log_g", "[Fe/H]", "age_gyr",
-]
-
-# Histograms show every sampled parameter + useful derived ones
-_DEFAULT_HIST_PARAMS = [
-    "mass", "Teff", "log_g", "[Fe/H]", "age_gyr",
-    "distance", "Av", "eep",
-]
-
-_DEFAULT_LATEX_PARAMS = [
-    "mass", "age_gyr", "[Fe/H]", "log_g",
-]
-
-# LaTeX-formatted axis labels
-_PARAM_LABELS = {
-    "mass": r"$M_\star$ [$M_\odot$]",
-    "initial_mass": r"$M_{\mathrm{init}}$ [$M_\odot$]",
-    "Teff": r"$T_{\mathrm{eff}}$ [K]",
-    "log_g": r"$\log g$ [dex]",
-    "[Fe/H]": r"[Fe/H] [dex]",
-    "age_gyr": r"Age [Gyr]",
-    "star_mass": r"$M_\star$ [$M_\odot$]",
-    "log_L": r"$\log L/L_\odot$",
-    "log_R": r"$\log R/R_\odot$",
-    "log_Teff": r"$\log T_{\mathrm{eff}}$",
-    "radius": r"$R_\star$ [$R_\odot$]",
-    "density": r"$\rho$ [g cm$^{-3}$]",
-    "distance": r"Distance [pc]",
-    "Av": r"$A_V$ [mag]",
-    "eep": "EEP",
-}
-
-# Default settings file shipped with the package
-_SETTINGS_FILE = Path(__file__).parent / "plot_settings.dat"
-
-# -----------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------
-
-
-def _is_bma(result):
-    """Check whether *result* is a BMAResult."""
-    return isinstance(result, BMAResult)
-
-
-def _extract_from(samples, derived, name):
-    """Extract a named parameter from a (samples, derived) pair."""
-    if name == "age_gyr":
-        return 10.0 ** samples[:, 1] / 1e9
-    if name == "[Fe/H]":
-        return samples[:, 2]
-    if name == "eep":
-        return samples[:, 0]
-    if name == "log_age":
-        return samples[:, 1]
-    if name == "distance" and samples.shape[1] >= 4:
-        return samples[:, 3]
-    if name == "Av" and samples.shape[1] >= 5:
-        return samples[:, 4]
-    if name in derived:
-        return derived[name]
-    _aliases = {
-        "log_L": "logL", "logL": "log_L",
-        "log_g": "logg", "logg": "log_g",
-        "log_R": "logR", "logR": "log_R",
-    }
-    alt = _aliases.get(name)
-    if alt and alt in derived:
-        return derived[alt]
-    raise KeyError(f"Parameter '{name}' not found in result")
-
-
-def _extract_param(result, name):
-    """Extract a named parameter array from a result dict or BMAResult.
-
-    Operates on the combined (BMA-weighted) samples/derived when given a
-    BMAResult. For per-grid raw samples use ``_extract_from`` directly.
-    """
-    if _is_bma(result):
-        samples = result.samples
-        derived = result.derived
-    else:
-        samples = result["samples"]
-        derived = result["derived"]
-    return _extract_from(samples, derived, name)
-
-
-def _get_model_labels(result):
-    """Return per-sample model label array if BMA, else None."""
-    if _is_bma(result):
-        return result.derived.get("model")
-    return None
-
-
-def _label_for(name):
-    """Return LaTeX label for a parameter name."""
-    return _PARAM_LABELS.get(name, name)
-
-
-def _percentile_str(arr):
-    """Return (median, lo_err, hi_err) from 15.87/50/84.13 percentiles."""
-    lo, med, hi = np.percentile(arr, [15.87, 50, 84.13])
-    return med, med - lo, hi - med
-
-
-def _kde_on_hist(ax, data, color, bins=40, alpha=0.3, density=True,
-                 label=None, histtype="stepfilled", kde_lw=2):
-    """Histogram + gaussian_kde overlay.  Returns (n, bins, kde_line)."""
-    finite = data[np.isfinite(data)]
-    if len(finite) < 2:
-        return None, None, None
-    n, bin_edges, _ = ax.hist(
-        finite, bins=bins, color=color, alpha=alpha,
-        density=density, histtype=histtype, label=label,
-        edgecolor="black", linewidth=0.3,
-    )
-    try:
-        kde = gaussian_kde(finite)
-        xx = np.linspace(bin_edges[0], bin_edges[-1], 300)
-        line, = ax.plot(xx, kde(xx), color=color, lw=kde_lw, alpha=1)
-    except np.linalg.LinAlgError:
-        line = None
-    return n, bin_edges, line
-
-
-def _apply_style(ax, fontname, fontsize, tick_labelsize):
-    """Apply ARIADNE-style font and tick configuration to an Axes."""
-    ax.tick_params(axis="both", which="major", labelsize=tick_labelsize)
-    ax.tick_params(axis="both", which="minor", labelsize=tick_labelsize)
-    for tick in ax.get_xticklabels():
-        tick.set_fontname(fontname)
-    for tick in ax.get_yticklabels():
-        tick.set_fontname(fontname)
-
-
-def _make_transparent_cmap(hex_color):
-    """Colormap from transparent to *hex_color*."""
-    rgba = to_rgba(hex_color)
-    colors = [
-        (rgba[0], rgba[1], rgba[2], 0.0),
-        (rgba[0], rgba[1], rgba[2], 0.7),
-    ]
-    return LinearSegmentedColormap.from_list("custom", colors, N=128)
-
-
-def _finalize(fig, filename, dpi=150):
-    """Save (PDF or PNG) or show; return the figure."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        try:
-            fig.tight_layout()
-        except Exception:
-            pass
-    if filename is not None:
-        fig.savefig(filename, dpi=dpi, bbox_inches="tight")
-    return fig
+from ._constants import (
+    _DEFAULT_CORNER_PARAMS,
+    _DEFAULT_HIST_PARAMS,
+    _DEFAULT_LATEX_PARAMS,
+    _MODEL_COLORS,
+    _PARAM_LABELS,
+    _SETTINGS_FILE,
+)
+from ._helpers import (
+    _apply_style,
+    _extract_from,
+    _extract_param,
+    _finalize,
+    _get_model_labels,
+    _is_bma,
+    _kde_on_hist,
+    _label_for,
+    _make_transparent_cmap,
+    _percentile_str,
+)
 
 
 # -----------------------------------------------------------------------
@@ -271,16 +112,22 @@ class ISOPlotter:
 
         def _ds_to_samples_and_derived(ds):
             cols = []
-            for k in ("eep", "log_age", "feh", "distance", "Av"):
+            for k in ("eep", "log_age", "feh", "eep_secondary", "distance", "Av", "vini"):
                 if k in ds:
                     cols.append(ds[k].values.flatten())
             samples = np.column_stack(cols) if cols else np.empty((0, 0))
             derived = {}
+            model_arr = None
             for var in ds.data_vars:
-                if var not in _SKIP_DERIVED:
+                if var == "model":
+                    model_arr = ds[var].values.flatten()
+                    continue
+                if var not in _SKIP_DERIVED and var != "eep_secondary" and var != "vini":
                     derived[var] = ds[var].values.flatten()
             if "age" in ds:
                 derived["age_gyr"] = ds["age"].values.flatten()
+            if model_arr is not None:
+                derived["model"] = np.array([str(m) for m in model_arr])
             return samples, derived
 
         post = _group_ds(idata.posterior)
@@ -326,54 +173,12 @@ class ISOPlotter:
             per_grid_samples[name] = s
             per_grid_derived[name] = d
 
-        # The combined posterior loaded above is BMA-weighted but doesn't
-        # carry per-sample `model` labels (the writer drops them). Rather
-        # than rely on the combined group at all, we REBUILD the combined
-        # samples from the per-grid groups using the BMA weights directly
-        # so the model labels are exact. This matches the in-memory
-        # `bayesian_model_average` logic: sample n_k = round(w_k * total)
-        # rows per grid and concatenate in model_names order.
-        if per_grid_samples:
-            total_per_grid = sum(
-                len(per_grid_samples[n]) for n in per_grid_samples
-            )
-            n_per_model = np.round(weights * total_per_grid).astype(int)
-            n_per_model = np.maximum(
-                n_per_model, (weights > 0).astype(int)
-            )
-
-            rng = np.random.default_rng()
-            new_samples_list = []
-            new_derived_lists = {}
-            model_labels = []
-            for name, n in zip(names, n_per_model):
-                if name not in per_grid_samples or n == 0:
-                    continue
-                s = per_grid_samples[name]
-                d = per_grid_derived[name]
-                n_take = int(n)
-                # Use replace=True so we faithfully reproduce BMA-weighted
-                # counts even when a grid's per-grid posterior has fewer
-                # raw samples than its share of the total.
-                idx = rng.choice(len(s), size=n_take, replace=True)
-                new_samples_list.append(s[idx])
-                for k, v in d.items():
-                    new_derived_lists.setdefault(k, []).append(v[idx])
-                model_labels.extend([name] * n_take)
-
-            if new_samples_list:
-                samples = np.concatenate(new_samples_list, axis=0)
-                # Keep only derived keys present in EVERY grid so all
-                # concatenations have the same length
-                valid_keys = [
-                    k for k, lst in new_derived_lists.items()
-                    if len(lst) == len(new_samples_list)
-                ]
-                derived = {
-                    k: np.concatenate(new_derived_lists[k])
-                    for k in valid_keys
-                }
-                derived["model"] = np.array(model_labels)
+        # The combined `posterior` group is the source of truth — it carries
+        # the BMA-weighted draws and per-sample `model` labels exactly as
+        # `bayesian_model_average` produced them. Don't resample here.
+        log_evidence = float(getattr(idata, "attrs", {}).get(
+            "log_evidence", float(np.max(log_ev))
+        ))
 
         result = BMAResult(
             weights=weights,
@@ -381,6 +186,7 @@ class ISOPlotter:
             derived=derived,
             model_names=names,
             log_evidences=log_ev,
+            log_evidence=log_evidence,
             per_grid_samples=per_grid_samples,
             per_grid_derived=per_grid_derived,
         )

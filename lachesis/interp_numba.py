@@ -7,14 +7,17 @@ for repeated scalar evaluations (nested sampling inner loop).
 
 import numpy as np
 import numba as nb
+from numba import prange
 
 
 @nb.njit(cache=True)
 def _searchsorted(arr, val):
     """Binary search returning index of interval containing val.
     Returns i such that arr[i] <= val < arr[i+1].
-    Returns -1 if val < arr[0], len(arr)-1 if val >= arr[-1].
+    Returns -1 if val is non-finite or out of [arr[0], arr[-1]].
     """
+    if not np.isfinite(val):
+        return -1
     n = len(arr)
     if val < arr[0] or val > arr[n - 1]:
         return -1
@@ -109,12 +112,12 @@ def _trilinear(grid, ax0, ax1, ax2, x0, x1, x2, n_cols):
     return result
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, parallel=True)
 def _trilinear_batch(grid, ax0, ax1, ax2, x0s, x1s, x2s, n_cols):
-    """Vectorized trilinear interpolation."""
+    """Vectorised trilinear interpolation; parallel over batch rows."""
     n = len(x0s)
     result = np.empty((n, n_cols))
-    for i in range(n):
+    for i in prange(n):
         result[i] = _trilinear(grid, ax0, ax1, ax2, x0s[i], x1s[i], x2s[i], n_cols)
     return result
 
@@ -176,12 +179,12 @@ def _quadlinear(grid, ax0, ax1, ax2, ax3, x0, x1, x2, x3, n_cols):
     return result
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, parallel=True)
 def _quadlinear_batch(grid, ax0, ax1, ax2, ax3, x0s, x1s, x2s, x3s, n_cols):
-    """Vectorized quadrilinear interpolation."""
+    """Vectorised quadrilinear interpolation; parallel over batch rows."""
     n = len(x0s)
     result = np.empty((n, n_cols))
-    for i in range(n):
+    for i in prange(n):
         result[i] = _quadlinear(
             grid, ax0, ax1, ax2, ax3,
             x0s[i], x1s[i], x2s[i], x3s[i], n_cols,
@@ -189,10 +192,17 @@ def _quadlinear_batch(grid, ax0, ax1, ax2, ax3, x0s, x1s, x2s, x3s, n_cols):
     return result
 
 
-def _pad_axis(arr, data, axis):
-    """Pad a length-1 axis to length 2 for interpolation."""
+def _pad_axis(arr, data, axis, half_width: float = 5.0):
+    """Pad a length-1 axis to length 2 so the interpolator has an interval.
+
+    The duplicated slice represents a constant-along-axis grid; widening the
+    pad keeps queries inside the interpolation interval for any plausible
+    coordinate value (single-feh grids would otherwise NaN outside ±0.01).
+    Memory is doubled along the affected axis only when padding is needed,
+    not unconditionally.
+    """
     if len(arr) == 1:
-        arr = np.array([arr[0] - 0.01, arr[0] + 0.01])
+        arr = np.array([arr[0] - half_width, arr[0] + half_width])
         data = np.concatenate([data, data], axis=axis)
     return arr, data
 

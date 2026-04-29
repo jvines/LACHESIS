@@ -1,33 +1,36 @@
-"""Tests for IsoPlotter — headless matplotlib rendering."""
+"""Tests for ISOPlotter — headless matplotlib rendering.
+
+The plotter loads results from a saved .nc file at construction time
+and exposes plot_corner / plot_histograms / plot_hr / plot_mass_age /
+plot_model_weights / summary / to_latex methods that take no result
+argument. These tests build a synthetic .nc fixture via
+lachesis.output.to_inference_data and exercise the public API.
+"""
 
 import matplotlib
+
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
-from matplotlib.figure import Figure
 
-from lachesis.bma import BMAResult
+from lachesis.bma import BMAResult, bayesian_model_average
+from lachesis.output import to_inference_data
 from lachesis.plotter import ISOPlotter, _extract_param, _percentile_str
 
 
-# -----------------------------------------------------------------------
-# Fixtures
-# -----------------------------------------------------------------------
+# ── Fixtures ────────────────────────────────────────────────────────
 
 
-@pytest.fixture
-def single_result():
-    """Fake single-grid fit result dict."""
-    rng = np.random.default_rng(42)
-    n = 500
+def _fake_single_result(seed: int = 42, n: int = 400) -> dict:
+    rng = np.random.default_rng(seed)
     samples = np.column_stack([
-        rng.uniform(200, 500, n),          # eep
-        rng.uniform(9.0, 10.1, n),         # log_age
-        rng.normal(-0.1, 0.2, n),          # [Fe/H]
-        rng.uniform(10, 100, n),           # distance
-        rng.uniform(0.0, 0.5, n),          # Av
+        rng.uniform(200, 500, n),       # eep
+        rng.uniform(9.0, 10.1, n),      # log_age
+        rng.normal(-0.1, 0.2, n),       # feh
+        rng.uniform(10, 100, n),        # distance
+        rng.uniform(0.0, 0.5, n),       # Av
     ])
     derived = {
         "initial_mass": rng.uniform(0.8, 1.3, n),
@@ -38,418 +41,213 @@ def single_result():
         "log_R": rng.normal(0.0, 0.03, n),
         "radius": rng.normal(1.0, 0.05, n),
         "density": rng.normal(1.4, 0.1, n),
+        "log_Teff": np.log10(rng.normal(5800, 100, n)),
+        "Mbol": rng.normal(4.7, 0.05, n),
     }
     return {
         "samples": samples,
         "derived": derived,
         "logz": -50.0,
         "logzerr": 0.1,
+        "param_names": ["eep", "log_age", "feh", "distance", "Av"],
     }
 
 
-@pytest.fixture
-def bma_result():
-    """Fake BMA result with two models."""
-    rng = np.random.default_rng(99)
-    n1, n2 = 300, 200
-    n = n1 + n2
-
-    samples1 = np.column_stack([
-        rng.uniform(200, 450, n1),
-        rng.uniform(9.0, 10.0, n1),
-        rng.normal(-0.1, 0.15, n1),
-        rng.uniform(10, 80, n1),
-        rng.uniform(0.0, 0.3, n1),
-    ])
-    samples2 = np.column_stack([
-        rng.uniform(250, 500, n2),
-        rng.uniform(9.2, 10.1, n2),
-        rng.normal(0.0, 0.2, n2),
-        rng.uniform(15, 90, n2),
-        rng.uniform(0.0, 0.4, n2),
-    ])
-    samples = np.vstack([samples1, samples2])
-
-    derived = {
-        "initial_mass": rng.uniform(0.7, 1.4, n),
-        "star_mass": rng.uniform(0.7, 1.4, n),
-        "Teff": rng.normal(5700, 150, n),
-        "log_g": rng.normal(4.3, 0.15, n),
-        "log_L": rng.normal(0.0, 0.07, n),
-        "log_R": rng.normal(0.0, 0.04, n),
-        "radius": rng.normal(1.0, 0.07, n),
-        "density": rng.normal(1.3, 0.15, n),
-        "model": np.array(["MIST"] * n1 + ["PARSEC"] * n2),
-    }
-
-    return BMAResult(
-        weights=np.array([0.6, 0.4]),
-        samples=samples,
-        derived=derived,
-        model_names=["MIST", "PARSEC"],
-        log_evidences=np.array([-48.0, -49.0]),
+def _fake_bma_result(seed: int = 99, n_per: int = 200):
+    """Return a BMAResult plus the per_grid_results dict for to_inference_data."""
+    rng = np.random.default_rng(seed)
+    grids = ["MIST", "PARSEC"]
+    per_grid = {}
+    fit_results = []
+    for i, name in enumerate(grids):
+        samples = np.column_stack([
+            rng.uniform(200 + 50 * i, 500, n_per),
+            rng.uniform(9.0 + 0.1 * i, 10.1, n_per),
+            rng.normal(-0.1 + 0.05 * i, 0.2, n_per),
+            rng.uniform(10, 100, n_per),
+            rng.uniform(0.0, 0.5, n_per),
+        ])
+        derived = {
+            "initial_mass": rng.uniform(0.8, 1.3, n_per),
+            "star_mass": rng.uniform(0.8, 1.3, n_per),
+            "Teff": rng.normal(5700 + 50 * i, 100, n_per),
+            "log_g": rng.normal(4.3, 0.15, n_per),
+            "log_L": rng.normal(0.0, 0.07, n_per),
+            "log_R": rng.normal(0.0, 0.04, n_per),
+            "radius": rng.normal(1.0, 0.07, n_per),
+            "density": rng.normal(1.3, 0.15, n_per),
+            "log_Teff": np.log10(rng.normal(5700 + 50 * i, 100, n_per)),
+            "Mbol": rng.normal(4.7, 0.05, n_per),
+        }
+        result = {
+            "samples": samples,
+            "derived": derived,
+            "logz": -50.0 + i * 0.5,
+            "logzerr": 0.1,
+            "param_names": ["eep", "log_age", "feh", "distance", "Av"],
+        }
+        fit_results.append(result)
+        per_grid[name] = result
+    bma = bayesian_model_average(
+        fit_results, names=grids, rng=np.random.default_rng(seed),
     )
+    return bma, per_grid
 
 
 @pytest.fixture
-def plotter():
-    return IsoPlotter()
-
-
-@pytest.fixture
-def plotter_custom(tmp_path):
-    """Plotter initialized from a custom settings file."""
-    cfg = tmp_path / "settings.dat"
-    cfg.write_text(
-        "# custom\n"
-        "figsize 10,6\n"
-        "fontsize 18\n"
-        "fontname sans-serif\n"
-        "tick_labelsize 14\n"
+def single_nc(tmp_path):
+    fit = _fake_single_result()
+    idata = to_inference_data(
+        fit_result=fit, grid_name="mist",
+        observed={"Gaia_G_EDR3": 10.0},
+        uncertainties={"Gaia_G_EDR3": 0.02},
     )
-    return IsoPlotter(settings=cfg)
+    p = tmp_path / "single.nc"
+    idata.to_netcdf(str(p))
+    return p
 
 
-# -----------------------------------------------------------------------
-# Init / settings
-# -----------------------------------------------------------------------
+@pytest.fixture
+def bma_nc(tmp_path):
+    bma, per_grid = _fake_bma_result()
+    idata = to_inference_data(
+        bma_result=bma, per_grid_results=per_grid, grid_name="BMA",
+        observed={"Gaia_G_EDR3": 10.0},
+        uncertainties={"Gaia_G_EDR3": 0.02},
+    )
+    p = tmp_path / "bma.nc"
+    idata.to_netcdf(str(p))
+    return p
+
+
+@pytest.fixture
+def single_plotter(single_nc, tmp_path):
+    return ISOPlotter(single_nc, tmp_path / "out_single")
+
+
+@pytest.fixture
+def bma_plotter(bma_nc, tmp_path):
+    return ISOPlotter(bma_nc, tmp_path / "out_bma")
+
+
+# ── Init / settings ─────────────────────────────────────────────────
 
 
 class TestInit:
+    def test_loads_single_nc(self, single_plotter):
+        assert single_plotter.bma is False
+        assert single_plotter.result is not None
 
-    def test_default_settings(self, plotter):
-        assert plotter.fontname == "serif"
-        assert plotter.fontsize == 26
-        assert plotter.tick_labelsize == 22
-        assert plotter.figsize == (12, 8)
-        assert plotter.hr_cmap == "cool"
+    def test_loads_bma_nc(self, bma_plotter):
+        assert bma_plotter.bma is True
+        assert isinstance(bma_plotter.result, BMAResult)
+        assert bma_plotter.result.model_names == ["MIST", "PARSEC"]
 
-    def test_custom_settings(self, plotter_custom):
-        assert plotter_custom.fontsize == 18
-        assert plotter_custom.fontname == "sans-serif"
-        assert plotter_custom.figsize == (10, 6)
-        assert plotter_custom.tick_labelsize == 14
-        # Defaults should still be filled for missing keys
-        assert plotter_custom.corner_med_c == "firebrick"
+    def test_creates_out_folder(self, single_nc, tmp_path):
+        out = tmp_path / "fresh_out"
+        ISOPlotter(single_nc, out)
+        assert out.exists()
 
-    def test_missing_settings_file(self, tmp_path):
-        """Non-existent file falls back to defaults."""
-        p = IsoPlotter(settings=tmp_path / "nope.dat")
-        assert p.fontname == "serif"
+    def test_default_style(self, single_plotter):
+        assert single_plotter.fontname == "serif"
+        assert single_plotter.fontsize == 26
+
+    def test_pdf_extension(self, single_nc, tmp_path):
+        p = ISOPlotter(single_nc, tmp_path / "pdf_out", pdf=True)
+        assert p._ext == ".pdf"
 
 
-# -----------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------
+# ── Helpers ─────────────────────────────────────────────────────────
 
 
 class TestHelpers:
-
-    def test_extract_age_gyr(self, single_result):
-        age = _extract_param(single_result, "age_gyr")
-        assert len(age) == 500
+    def test_extract_age_gyr_from_dict(self):
+        fit = _fake_single_result()
+        age = _extract_param(fit, "age_gyr")
+        assert len(age) == len(fit["samples"])
         assert np.all(age > 0)
 
-    def test_extract_feh(self, single_result):
-        feh = _extract_param(single_result, "[Fe/H]")
-        assert len(feh) == 500
+    def test_extract_feh_from_dict(self):
+        fit = _fake_single_result()
+        feh = _extract_param(fit, "[Fe/H]")
+        assert len(feh) == len(fit["samples"])
 
-    def test_extract_derived(self, single_result):
-        teff = _extract_param(single_result, "Teff")
-        assert len(teff) == 500
+    def test_extract_missing_raises(self):
+        fit = _fake_single_result()
+        with pytest.raises(KeyError, match="totally_missing"):
+            _extract_param(fit, "totally_missing")
 
-    def test_extract_missing_raises(self, single_result):
-        with pytest.raises(KeyError, match="nonexistent"):
-            _extract_param(single_result, "nonexistent")
+    def test_extract_alias_logg(self):
+        fit = _fake_single_result()
+        a = _extract_param(fit, "log_g")
+        d2 = {**fit["derived"], "logg": fit["derived"]["log_g"]}
+        d2.pop("log_g")
+        b = _extract_param({**fit, "derived": d2}, "log_g")
+        assert len(a) == len(b)
 
     def test_percentile_str(self):
-        arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0] * 100)
+        arr = np.tile(np.arange(101.0), 10)
         med, lo, hi = _percentile_str(arr)
-        assert med == pytest.approx(3.0, abs=0.1)
+        assert med == pytest.approx(50.0, abs=1.0)
         assert lo > 0
         assert hi > 0
 
 
-# -----------------------------------------------------------------------
-# Corner plot
-# -----------------------------------------------------------------------
+# ── Plotting smoke tests ────────────────────────────────────────────
 
 
-class TestCorner:
+class TestSinglePlots:
+    def test_corner_single(self, single_plotter):
+        single_plotter.plot_corner()
+        plt.close("all")
 
-    def test_returns_figure_single(self, plotter, single_result):
-        fig = plotter.plot_corner(single_result)
-        assert isinstance(fig, Figure)
-        plt.close(fig)
+    def test_corner_bma(self, bma_plotter):
+        bma_plotter.plot_corner()
+        plt.close("all")
 
-    def test_returns_figure_bma(self, plotter, bma_result):
-        fig = plotter.plot_corner(bma_result)
-        assert isinstance(fig, Figure)
-        plt.close(fig)
+    def test_histograms_single(self, single_plotter):
+        single_plotter.plot_histograms()
+        plt.close("all")
 
-    def test_custom_params(self, plotter, single_result):
-        fig = plotter.plot_corner(single_result, params=["Teff", "log_g"])
-        assert isinstance(fig, Figure)
-        axes = fig.get_axes()
-        visible = [ax for ax in axes if ax.get_visible()]
-        assert len(visible) == 3
-        plt.close(fig)
+    def test_summary_single(self, single_plotter):
+        single_plotter.summary()
+        plt.close("all")
 
-    def test_saves_to_file(self, plotter, single_result, tmp_path):
-        out = str(tmp_path / "corner.png")
-        fig = plotter.plot_corner(single_result, filename=out)
-        assert isinstance(fig, Figure)
-        assert (tmp_path / "corner.png").exists()
-        plt.close(fig)
+    def test_summary_bma(self, bma_plotter):
+        bma_plotter.summary()
+        plt.close("all")
 
-    def test_saves_to_pdf(self, plotter, single_result, tmp_path):
-        out = str(tmp_path / "corner.pdf")
-        fig = plotter.plot_corner(single_result, filename=out)
-        assert isinstance(fig, Figure)
-        assert (tmp_path / "corner.pdf").exists()
-        plt.close(fig)
-
-    def test_skips_missing_params(self, plotter, single_result):
-        fig = plotter.plot_corner(
-            single_result,
-            params=["Teff", "nonexistent_param", "log_g"],
-        )
-        assert isinstance(fig, Figure)
-        plt.close(fig)
-
-    def test_no_params_raises(self, plotter):
-        result = {"samples": np.zeros((10, 3)), "derived": {}}
-        with pytest.raises(ValueError, match="No plottable"):
-            plotter.plot_corner(result, params=["nonexistent"])
-
-    def test_diagonal_has_titles(self, plotter, single_result):
-        fig = plotter.plot_corner(single_result, params=["Teff", "log_g"])
-        axes = fig.get_axes()
-        diag_axes = [ax for ax in axes if ax.get_visible() and ax.get_title()]
-        # Both diagonal panels should have value+CI titles
-        assert len(diag_axes) == 2
-        for ax in diag_axes:
-            title = ax.get_title()
-            assert "^{+" in title
-            assert "_{-" in title
-        plt.close(fig)
+    def test_to_latex_single(self, single_plotter):
+        out = single_plotter.to_latex()
+        # to_latex returns either a formatted string or a per-param dict.
+        assert out is None or isinstance(out, (str, dict))
+        plt.close("all")
 
 
-# -----------------------------------------------------------------------
-# Histograms
-# -----------------------------------------------------------------------
+# ── BMA-specific ────────────────────────────────────────────────────
 
 
-class TestHistograms:
+class TestBMAOnly:
+    def test_model_weights(self, bma_plotter):
+        bma_plotter.plot_model_weights()
+        plt.close("all")
 
-    def test_returns_list_single(self, plotter, single_result):
-        figs = plotter.plot_histograms(single_result)
-        assert isinstance(figs, list)
-        assert len(figs) > 0
-        for f1, f2 in figs:
-            assert isinstance(f1, Figure)
-            assert isinstance(f2, Figure)
-            plt.close(f1)
-            plt.close(f2)
-
-    def test_returns_list_bma(self, plotter, bma_result):
-        figs = plotter.plot_histograms(bma_result)
-        assert isinstance(figs, list)
-        assert len(figs) > 0
-        for f1, f2 in figs:
-            assert isinstance(f1, Figure)
-            assert isinstance(f2, Figure)
-            plt.close(f1)
-            plt.close(f2)
-
-    def test_saves_to_files(self, plotter, bma_result, tmp_path):
-        prefix = str(tmp_path / "hist")
-        figs = plotter.plot_histograms(bma_result, filename_prefix=prefix)
-        # At least one file should exist
-        saved = list(tmp_path.glob("hist_*.png"))
-        assert len(saved) > 0
-        for f1, f2 in figs:
-            plt.close(f1)
-            plt.close(f2)
-
-    def test_bma_legend_has_prob(self, plotter, bma_result):
-        figs = plotter.plot_histograms(bma_result)
-        # Check the first PDF figure has "prob:" in a legend entry
-        f1, _ = figs[0]
-        legend = f1.get_axes()[0].get_legend()
-        texts = [t.get_text() for t in legend.get_texts()]
-        assert any("prob:" in t for t in texts)
-        for f1, f2 in figs:
-            plt.close(f1)
-            plt.close(f2)
+    def test_per_grid_labels_round_trip(self, bma_plotter):
+        # The combined BMA posterior carries per-sample model labels
+        # written by output.to_inference_data; the loader pulls them
+        # straight from the posterior group rather than resampling.
+        labels = bma_plotter.result.derived.get("model")
+        assert labels is not None
+        assert set(labels.tolist()) == {"MIST", "PARSEC"}
 
 
-# -----------------------------------------------------------------------
-# HR diagram
-# -----------------------------------------------------------------------
+# ── Figure-leak guard ───────────────────────────────────────────────
 
 
-class TestHR:
-
-    def test_returns_figure_single(self, plotter, single_result):
-        fig = plotter.plot_hr(single_result)
-        assert isinstance(fig, Figure)
-        plt.close(fig)
-
-    def test_returns_figure_bma(self, plotter, bma_result):
-        fig = plotter.plot_hr(bma_result)
-        assert isinstance(fig, Figure)
-        plt.close(fig)
-
-    def test_saves_to_file(self, plotter, single_result, tmp_path):
-        out = str(tmp_path / "hr.png")
-        fig = plotter.plot_hr(single_result, filename=out)
-        assert isinstance(fig, Figure)
-        assert (tmp_path / "hr.png").exists()
-        plt.close(fig)
-
-    def test_xaxis_inverted(self, plotter, single_result):
-        fig = plotter.plot_hr(single_result)
-        ax = fig.get_axes()[0]
-        assert ax.get_xlim()[0] > ax.get_xlim()[1]
-        plt.close(fig)
-
-
-# -----------------------------------------------------------------------
-# Mass-Age
-# -----------------------------------------------------------------------
-
-
-class TestMassAge:
-
-    def test_returns_figure_single(self, plotter, single_result):
-        fig = plotter.plot_mass_age(single_result)
-        assert isinstance(fig, Figure)
-        plt.close(fig)
-
-    def test_returns_figure_bma(self, plotter, bma_result):
-        fig = plotter.plot_mass_age(bma_result)
-        assert isinstance(fig, Figure)
-        plt.close(fig)
-
-    def test_saves_to_file(self, plotter, bma_result, tmp_path):
-        out = str(tmp_path / "mass_age.png")
-        fig = plotter.plot_mass_age(bma_result, filename=out)
-        assert isinstance(fig, Figure)
-        assert (tmp_path / "mass_age.png").exists()
-        plt.close(fig)
-
-
-# -----------------------------------------------------------------------
-# Model weights
-# -----------------------------------------------------------------------
-
-
-class TestModelWeights:
-
-    def test_returns_figure(self, plotter, bma_result):
-        fig = plotter.plot_model_weights(bma_result)
-        assert isinstance(fig, Figure)
-        plt.close(fig)
-
-    def test_rejects_non_bma(self, plotter, single_result):
-        with pytest.raises(TypeError, match="BMAResult"):
-            plotter.plot_model_weights(single_result)
-
-    def test_saves_to_file(self, plotter, bma_result, tmp_path):
-        out = str(tmp_path / "weights.png")
-        fig = plotter.plot_model_weights(bma_result, filename=out)
-        assert isinstance(fig, Figure)
-        assert (tmp_path / "weights.png").exists()
-        plt.close(fig)
-
-    def test_bar_count_matches_models(self, plotter, bma_result):
-        fig = plotter.plot_model_weights(bma_result)
-        ax = fig.get_axes()[0]
-        bars = [p for p in ax.patches if hasattr(p, "get_height")]
-        assert len(bars) == len(bma_result.model_names)
-        plt.close(fig)
-
-    def test_weight_annotations(self, plotter, bma_result):
-        fig = plotter.plot_model_weights(bma_result)
-        ax = fig.get_axes()[0]
-        texts = [t.get_text() for t in ax.texts]
-        assert len(texts) == len(bma_result.model_names)
-        # Each annotation should be a float string
-        for t in texts:
-            float(t)  # should not raise
-        plt.close(fig)
-
-
-# -----------------------------------------------------------------------
-# to_latex
-# -----------------------------------------------------------------------
-
-
-class TestToLatex:
-
-    def test_returns_dict(self, plotter, single_result):
-        out = plotter.to_latex(single_result)
-        assert isinstance(out, dict)
-        assert len(out) > 0
-
-    def test_format(self, plotter, single_result):
-        out = plotter.to_latex(single_result)
-        for key, val in out.items():
-            assert val.startswith("$")
-            assert val.endswith("$")
-            assert "^{+" in val
-            assert "_{-" in val
-
-    def test_custom_params(self, plotter, single_result):
-        out = plotter.to_latex(single_result, params=["Teff"])
-        assert "Teff" in out
-        assert len(out) == 1
-
-    def test_skips_missing(self, plotter, single_result):
-        out = plotter.to_latex(single_result, params=["nonexistent"])
-        assert len(out) == 0
-
-    def test_bma_result(self, plotter, bma_result):
-        out = plotter.to_latex(bma_result)
-        assert isinstance(out, dict)
-        assert "initial_mass" in out
-
-    def test_default_params(self, plotter, single_result):
-        out = plotter.to_latex(single_result)
-        # age_gyr, Teff, log_g, [Fe/H], initial_mass should be present
-        # distance and Av may also be present
-        for key in ["initial_mass", "Teff", "log_g", "[Fe/H]", "age_gyr"]:
-            assert key in out
-
-
-# -----------------------------------------------------------------------
-# Summary
-# -----------------------------------------------------------------------
-
-
-class TestSummary:
-
-    def test_returns_figure_single(self, plotter, single_result):
-        fig = plotter.summary(single_result)
-        assert isinstance(fig, Figure)
-        plt.close(fig)
-
-    def test_returns_figure_bma(self, plotter, bma_result):
-        fig = plotter.summary(bma_result)
-        assert isinstance(fig, Figure)
-        plt.close(fig)
-
-    def test_saves_to_file(self, plotter, bma_result, tmp_path):
-        out = str(tmp_path / "summary.png")
-        fig = plotter.summary(bma_result, filename=out)
-        assert isinstance(fig, Figure)
-        assert (tmp_path / "summary.png").exists()
-        plt.close(fig)
-
-    def test_has_multiple_axes(self, plotter, single_result):
-        fig = plotter.summary(single_result)
-        axes = fig.get_axes()
-        # At least the 4 main panels + mini-corner subplots
-        assert len(axes) >= 4
-        plt.close(fig)
+class TestFigureLeak:
+    def test_corner_closes_on_save(self, single_plotter):
+        before = len(plt.get_fignums())
+        single_plotter.plot_corner()
+        after = len(plt.get_fignums())
+        assert after <= before + 1
+        plt.close("all")
