@@ -14,6 +14,8 @@ try:
 
     @nb.njit(cache=True)
     def _searchsorted_bc(arr, val):
+        if not np.isfinite(val):
+            return -1
         n = len(arr)
         if val < arr[0] or val > arr[n - 1]:
             return -1
@@ -48,8 +50,12 @@ try:
         d2 = (x2 - ax2[i2]) / (ax2[i2 + 1] - ax2[i2])
         d3 = (x3 - ax3[i3]) / (ax3[i3 + 1] - ax3[i3])
 
+        # Mirror lachesis.interp_numba._quadlinear: track has_nan via a flag
+        # so the final value is well-defined even when NaN corners coincide
+        # with zero weights.
         for b in range(n_bands):
             val = 0.0
+            has_nan = False
             for di0 in range(2):
                 for di1 in range(2):
                     for di2 in range(2):
@@ -62,17 +68,17 @@ try:
                             )
                             c = grid[i0 + di0, i1 + di1, i2 + di2, i3 + di3, b]
                             if w > 0 and np.isnan(c):
-                                val = np.nan
+                                has_nan = True
                                 break
                             if not np.isnan(c):
                                 val += w * c
-                        if np.isnan(val):
+                        if has_nan:
                             break
-                    if np.isnan(val):
+                    if has_nan:
                         break
-                if np.isnan(val):
+                if has_nan:
                     break
-            result[b] = val
+            result[b] = np.nan if has_nan else val
 
         return result
 
@@ -130,13 +136,31 @@ class BCTable:
             (n_teff, n_logg, n_feh, n_av, n_bands), np.nan, dtype=np.float64
         )
 
-        for fi in range(n_feh):
-            data = raw[fi]
-            for row in data:
-                ti = np.searchsorted(self._teff_values, row[0])
-                li = np.searchsorted(self._logg_values, row[1])
-                ai = np.searchsorted(self._av_values, row[3])
-                self._grid[ti, li, fi, ai, :] = row[5:]
+        # Vectorised rectilinear assignment with explicit equality checks.
+        # The previous loop used np.searchsorted insertion indices without
+        # confirming the row coordinate exactly matches an axis value, so
+        # any floating-point drift in the raw data silently scrambled the
+        # grid by writing the row into a neighbouring cell.
+        teff_idx = np.searchsorted(self._teff_values, raw[..., 0])
+        logg_idx = np.searchsorted(self._logg_values, raw[..., 1])
+        av_idx = np.searchsorted(self._av_values, raw[..., 3])
+        feh_idx = np.broadcast_to(
+            np.arange(n_feh)[:, None], teff_idx.shape
+        )
+
+        if (
+            (self._teff_values[teff_idx] != raw[..., 0]).any()
+            or (self._logg_values[logg_idx] != raw[..., 1]).any()
+            or (self._av_values[av_idx] != raw[..., 3]).any()
+        ):
+            raise ValueError(
+                "BC table coordinates do not match the inferred axis "
+                "values exactly; refusing to silently misplace rows."
+            )
+
+        self._grid[
+            teff_idx, logg_idx, feh_idx, av_idx, :
+        ] = raw[..., 5:]
 
         self._finalize()
 
@@ -183,6 +207,10 @@ class BCTable:
 
         All systems share identical (Teff, logg, [Fe/H], Av) axes,
         so their band columns are concatenated along axis 4 of the 5D grid.
+
+        Opens the HDF5 file once and constructs a single instance instead of
+        repeatedly invoking ``cls(...)`` per system (each of which would
+        re-open the file and rebuild the grid from scratch).
         """
         if systems is None:
             systems = list(_DEFAULT_SYSTEMS)
@@ -194,47 +222,85 @@ class BCTable:
             raise FileNotFoundError(f"BC table not found: {h5_path}")
 
         import h5py
+        merged_bands: list[str] = []
+        seen: set[str] = set()
+        grids: list[np.ndarray] = []
+        teff_values = logg_values = feh_values = av_values = None
+
         with h5py.File(h5_path, "r") as f:
             available = [s for s in systems if s in f]
+            if not available:
+                raise FileNotFoundError(
+                    f"No BC systems found for {systems} in {h5_path}"
+                )
 
-        if not available:
-            raise FileNotFoundError(
-                f"No BC systems found for {systems} in {h5_path}"
-            )
+            for sysname in available:
+                grp = f[sysname]
+                raw = grp["data"][:].astype(np.float64)
+                feh_vals = grp["feh_values"][:]
+                bands = [s.decode() for s in grp["band_names"][:]]
 
-        # Load first system to get axes
-        first = cls(directory, system=available[0])
+                d0 = raw[0]
+                t_vals = np.unique(d0[:, 0])
+                l_vals = np.unique(d0[:, 1])
+                a_vals = np.unique(d0[:, 3])
 
-        if len(available) == 1:
-            return first
+                if teff_values is None:
+                    teff_values, logg_values, feh_values, av_values = (
+                        t_vals, l_vals, feh_vals, a_vals,
+                    )
+                else:
+                    if (
+                        not np.array_equal(t_vals, teff_values)
+                        or not np.array_equal(l_vals, logg_values)
+                        or not np.array_equal(feh_vals, feh_values)
+                        or not np.array_equal(a_vals, av_values)
+                    ):
+                        raise ValueError(
+                            f"System '{sysname}' axes differ from the others; "
+                            "BC systems must share identical axes."
+                        )
 
-        # Merge additional systems
-        merged_bands = list(first._bands)
-        seen = set(merged_bands)
-        grids = [first._grid]
+                new_idx = [i for i, b in enumerate(bands) if b not in seen]
+                if not new_idx:
+                    continue
 
-        for sysname in available[1:]:
-            extra = cls(directory, system=sysname)
+                n_t, n_l, n_f, n_a = (
+                    len(t_vals), len(l_vals), len(feh_vals), len(a_vals)
+                )
+                n_b = len(new_idx)
+                grid = np.full((n_t, n_l, n_f, n_a, n_b), np.nan, dtype=np.float64)
 
-            new_idx = []
-            new_names = []
-            for i, b in enumerate(extra._bands):
-                if b not in seen:
-                    new_idx.append(i)
-                    new_names.append(b)
-                    seen.add(b)
+                t_idx = np.searchsorted(t_vals, raw[..., 0])
+                l_idx = np.searchsorted(l_vals, raw[..., 1])
+                a_idx = np.searchsorted(a_vals, raw[..., 3])
+                f_idx = np.broadcast_to(np.arange(n_f)[:, None], t_idx.shape)
+                if (
+                    (t_vals[t_idx] != raw[..., 0]).any()
+                    or (l_vals[l_idx] != raw[..., 1]).any()
+                    or (a_vals[a_idx] != raw[..., 3]).any()
+                ):
+                    raise ValueError(
+                        f"System '{sysname}': BC table coordinates do not "
+                        "match the inferred axis values exactly."
+                    )
+                grid[t_idx, l_idx, f_idx, a_idx, :] = raw[..., 5 + np.array(new_idx)]
+                grids.append(grid)
+                for i in new_idx:
+                    merged_bands.append(bands[i])
+                    seen.add(bands[i])
 
-            if not new_names:
-                continue
-
-            grids.append(extra._grid[:, :, :, :, new_idx])
-            merged_bands.extend(new_names)
-
-        first._system = "+".join(available)
-        first._bands = merged_bands
-        first._grid = np.concatenate(grids, axis=4)
-        first._finalize()
-        return first
+        # Build instance directly without re-running __init__
+        inst = cls.__new__(cls)
+        inst._teff_values = teff_values
+        inst._logg_values = logg_values
+        inst._feh_values = feh_values
+        inst._av_values = av_values
+        inst._bands = merged_bands
+        inst._system = "+".join(available)
+        inst._grid = np.concatenate(grids, axis=4) if len(grids) > 1 else grids[0]
+        inst._finalize()
+        return inst
 
     @property
     def bands(self) -> list[str]:
