@@ -89,6 +89,26 @@ except ImportError:
 
 _DEFAULT_SYSTEMS = ["UBVRIplus", "WISE", "SDSSugriz", "PanSTARRS", "SkyMapper", "GALEX"]
 
+# Photometric zero-point convention per MIST BC system.
+# MIST distributes UBVRIplus and 2MASS in Vega magnitudes; the survey
+# systems (SDSS, PS1, SkyMapper, GALEX) are in AB. The catalogue must use
+# the same zero point as the BC table or magnitudes are off by the
+# Vega-AB offset (~0.1 mag in Gaia G, ~0.5 mag in u/g, etc).
+_SYSTEM_ZERO_POINT: dict[str, str] = {
+    "UBVRIplus": "Vega",
+    "WISE": "Vega",
+    "SDSSugriz": "AB",
+    "PanSTARRS": "AB",
+    "SkyMapper": "AB",
+    "GALEX": "AB",
+}
+
+# Per-band override map for systems that mix conventions (e.g. UBVRIplus
+# bundles Gaia EDR3 + 2MASS + Tycho/Bessell — all Vega — alongside Hipparcos
+# Hp which is also Vega; nothing to override for now). Kept here so
+# additions are obvious.
+_BAND_ZERO_POINT_OVERRIDES: dict[str, str] = {}
+
 
 class BCTable:
     """Bolometric correction interpolator.
@@ -118,6 +138,10 @@ class BCTable:
             self._bands = [s.decode() for s in grp["band_names"][:]]
 
         self._system = system
+        sys_zp = _SYSTEM_ZERO_POINT.get(system, "Vega")
+        self._band_systems = {
+            b: _BAND_ZERO_POINT_OVERRIDES.get(b, sys_zp) for b in self._bands
+        }
 
         # raw shape: (n_feh, n_rows, n_cols) where cols = Teff,logg,feh,Av,Rv,bands...
         d0 = raw[0]
@@ -225,6 +249,7 @@ class BCTable:
         merged_bands: list[str] = []
         seen: set[str] = set()
         grids: list[np.ndarray] = []
+        band_systems: dict[str, str] = {}
         teff_values = logg_values = feh_values = av_values = None
 
         with h5py.File(h5_path, "r") as f:
@@ -286,9 +311,12 @@ class BCTable:
                     )
                 grid[t_idx, l_idx, f_idx, a_idx, :] = raw[..., 5 + np.array(new_idx)]
                 grids.append(grid)
+                sys_zp = _SYSTEM_ZERO_POINT.get(sysname, "Vega")
                 for i in new_idx:
-                    merged_bands.append(bands[i])
-                    seen.add(bands[i])
+                    band = bands[i]
+                    merged_bands.append(band)
+                    band_systems[band] = _BAND_ZERO_POINT_OVERRIDES.get(band, sys_zp)
+                    seen.add(band)
 
         # Build instance directly without re-running __init__
         inst = cls.__new__(cls)
@@ -297,6 +325,7 @@ class BCTable:
         inst._feh_values = feh_values
         inst._av_values = av_values
         inst._bands = merged_bands
+        inst._band_systems = band_systems
         inst._system = "+".join(available)
         inst._grid = np.concatenate(grids, axis=4) if len(grids) > 1 else grids[0]
         inst._finalize()
@@ -305,6 +334,29 @@ class BCTable:
     @property
     def bands(self) -> list[str]:
         return self._active_bands if self._active_bands is not None else self._bands
+
+    def zero_point(self, band: str) -> str:
+        """Return the zero-point convention ('Vega' or 'AB') for a band."""
+        if not hasattr(self, "_band_systems"):
+            return "Vega"
+        return self._band_systems.get(band, "Vega")
+
+    @property
+    def band_systems(self) -> dict[str, str]:
+        """Per-band zero-point ('Vega'/'AB') for every loaded band."""
+        return dict(getattr(self, "_band_systems", {}))
+
+    def assert_zero_point(self, band: str, expected: str) -> None:
+        """Raise ValueError when the BC table convention for *band*
+        differs from *expected* ('Vega' or 'AB')."""
+        actual = self.zero_point(band)
+        if actual != expected:
+            raise ValueError(
+                f"BC table convention mismatch for band '{band}': "
+                f"BC table is {actual}, caller expects {expected}. "
+                "Mixing Vega and AB magnitudes leads to band-specific "
+                "biases of ~0.1-0.5 mag."
+            )
 
     @property
     def teff_values(self) -> np.ndarray:
