@@ -140,8 +140,8 @@ def display_summary(samples, derived, param_names):
     if "distance" in param_names:
         idx = param_names.index("distance")
         display_params.append(("Distance (pc)", samples[:, idx]))
-    if "av" in param_names:
-        idx = param_names.index("av")
+    if "Av" in param_names:
+        idx = param_names.index("Av")
         display_params.append(("Av (mag)", samples[:, idx]))
 
     fmt = f"{_T3}{{:20s}}  {{:>10s}}  {{:>20s}}  {{:>20s}}"

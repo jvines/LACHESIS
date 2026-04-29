@@ -15,6 +15,13 @@ _AV_PER_EBV_PLANCK = 3.1
 _AV_BAYESTAR_FACTOR = 2.742 * 0.884  # Bayestar correction (Schlafly+11)
 _AV_FALLBACK = 0.1  # used when dustmap query fails
 
+# Gaia DR3 GSP_Phot Teff is bias-calibrated against APOGEE/GALAH but the
+# reported errors (b_Teff/B_Teff) are unrealistically tight for bright
+# stars — sometimes only a few Kelvin. Using them raw pins the fit at a
+# possibly wrong Teff. We apply a floor based on Andrae+2023's external
+# RMS (~100 K typical, 200 K conservative).
+_GAIA_TEFF_ERR_FLOOR = 100.0
+
 
 class Star:
     """Observed stellar properties for isochrone fitting.
@@ -109,6 +116,12 @@ class Star:
             self.distance_e = dist_e if dist_e is not None else lib._distance_e
             self.teff = lib._teff
             self.teff_e = lib._teff_e
+            if (
+                self.teff is not None
+                and self.teff_e is not None
+                and self.teff_e < _GAIA_TEFF_ERR_FLOOR
+            ):
+                self.teff_e = _GAIA_TEFF_ERR_FLOOR
             self.Av = Av if Av is not None else lib.Av
             self.luminosity = None
             self.luminosity_e = None
