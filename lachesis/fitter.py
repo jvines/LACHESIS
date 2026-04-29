@@ -246,6 +246,13 @@ class Fitter:
         if self._out_folder:
             os.makedirs(self._out_folder, exist_ok=True)
 
+        # Reset per-run state so a second initialize() doesn't accumulate
+        # entries from a previous run with a different grid set.
+        self._grid_objects = {}
+        self._interpolators = {}
+        self._fitters = {}
+        self._bc_table = None
+
         # Load grids
         for name in self._grids:
             self._grid_objects[name] = _load_grid(name)
@@ -309,7 +316,7 @@ class Fitter:
             distance_prior = ("normal", dist_cfg[1], dist_cfg[2])
         elif self._star.distance is not None and self._star.distance_e is not None:
             distance_prior = (
-                "normal", self._star.distance, 3 * self._star.distance_e
+                "normal", self._star.distance, self._star.distance_e
             )
         else:
             distance_prior = ("normal", 500.0, 5000.0)
@@ -321,7 +328,8 @@ class Fitter:
         elif av_cfg and isinstance(av_cfg, tuple) and av_cfg[0] == "uniform":
             av_range = (av_cfg[1], av_cfg[2])
         else:
-            av_range = (0.0, self._star.Av or 1.0)
+            av_hi = 1.0 if self._star.Av is None else max(self._star.Av, 1e-3)
+            av_range = (0.0, av_hi)
 
         # Build KDE-based external priors from ARIADNE posteriors.
         # Pre-tabulate log(pdf) on a fine grid and interpolate with np.interp
@@ -329,12 +337,19 @@ class Fitter:
         external_kdes = {}
         if self._star.external_posteriors:
             from scipy.stats import gaussian_kde
+            from numpy.linalg import LinAlgError
             for param, samples in self._star.external_posteriors.items():
                 if len(samples) < 10:
                     continue
-                kde = gaussian_kde(samples)
+                try:
+                    kde = gaussian_kde(samples)
+                except LinAlgError:
+                    # Degenerate samples (e.g. zero variance); skip silently.
+                    continue
                 lo, hi = float(samples.min()), float(samples.max())
-                pad = 0.1 * (hi - lo)
+                std = float(np.std(samples))
+                # Pad ≥5σ so the KDE tails aren't clipped to a hard wall.
+                pad = max(0.1 * (hi - lo), 5.0 * std)
                 grid = np.linspace(lo - pad, hi + pad, 2048)
                 log_pdf = np.log(np.maximum(kde(grid), 1e-300))
                 external_kdes[param] = (grid, log_pdf)

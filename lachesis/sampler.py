@@ -9,7 +9,7 @@ import numpy as np
 
 from lachesis.interp import GridInterpolator
 from lachesis.likelihood import log_likelihood
-from lachesis.prior import IsochonePrior
+from lachesis.prior import IsochronePrior
 
 
 class IsochroneFitter:
@@ -42,7 +42,7 @@ class IsochroneFitter:
         self._binary = binary
         self._has_vini = vini_range is not None
         self._external_kdes = external_kdes or {}
-        self.prior = IsochonePrior(
+        self.prior = IsochronePrior(
             eep_range=eep_range,
             age_range=age_range,
             feh_range=feh_range,
