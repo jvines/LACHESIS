@@ -1,9 +1,19 @@
 """Star class — holds observed stellar properties for isochrone fitting."""
 
+import logging
+
 import numpy as np
 
 from lachesis.display import display_banner
 from lachesis.error import InputError
+
+logger = logging.getLogger(__name__)
+
+# Av/E(B-V) coefficients (Schlafly+11 V-band).
+_AV_PER_EBV_SFD = 2.742  # for SFD/Lenz
+_AV_PER_EBV_PLANCK = 3.1
+_AV_BAYESTAR_FACTOR = 2.742 * 0.884  # Bayestar correction (Schlafly+11)
+_AV_FALLBACK = 0.1  # used when dustmap query fails
 
 
 class Star:
@@ -62,6 +72,7 @@ class Star:
         Av: float | None = None,
         verbose: bool = True,
         dustmap: str = 'SFD',
+        offline: bool = False,
     ):
         self.starname = starname
         self.ra = ra
@@ -70,9 +81,9 @@ class Star:
         self.external_posteriors = {}  # populated by from_ariadne()
         self.feh_posterior = None       # populated by from_ariadne()
 
-        if magnitudes is None:
+        if magnitudes is None and not offline:
             if verbose:
-                from termcolor import colored
+                from lachesis.display import colored
                 c = display_banner(starname)
                 print(colored(f'\t\t*** LOOKING UP ARCHIVAL INFORMATION ***', c))
             from lachesis.librarian import Librarian
@@ -117,12 +128,12 @@ class Star:
                 self.feh = feh
                 self.feh_e = feh_e
         else:
-            # User provided magnitudes — skip Librarian
+            # User provided magnitudes (or offline=True): skip Librarian
             if verbose:
                 display_banner(starname)
-            self.magnitudes = magnitudes
+            self.magnitudes = magnitudes if magnitudes is not None else {}
             self.parallax = plx
-            self.parallax_e = plx_e
+            self.parallax_e = plx_e if plx is not None else None
             self.distance = dist
             self.distance_e = dist_e
             self.logg = logg
@@ -166,40 +177,48 @@ class Star:
         import astropy.units as u
 
         if dustmap not in self._DUSTMAPS:
-            self.Av = 0.1
+            logger.warning("Unknown dustmap '%s'; using fallback Av=%.2f",
+                           dustmap, _AV_FALLBACK)
+            self.Av = _AV_FALLBACK
             return
 
         mod_path, cls_name = self._DUSTMAPS[dustmap]
         try:
             mod = import_module(mod_path)
             dmap = getattr(mod, cls_name)()
-        except Exception:
-            self.Av = 0.1
+        except Exception as e:
+            logger.warning("Dustmap '%s' init failed (%s); using fallback Av=%.2f",
+                           dustmap, e, _AV_FALLBACK)
+            self.Av = _AV_FALLBACK
             return
 
         d = self.distance if self.distance is not None else 1000.0
+        # SFD / Planck queries are 2D and ignore distance, but Bayestar uses
+        # it; pass it through for everyone since it does not change the SFD
+        # result.
         coords = SkyCoord(self.ra, self.dec, distance=d,
                           unit=(u.deg, u.deg, u.pc), frame='icrs')
 
         try:
             if dustmap in ('SFD', 'Lenz'):
                 ebv = dmap(coords)
-                self.Av = float(ebv) * 2.742
+                self.Av = float(ebv) * _AV_PER_EBV_SFD
             elif dustmap == 'Bayestar':
                 ebvs = dmap(coords, mode='percentile', pct=[15, 50, 84])
                 if np.any(np.isnan(ebvs)):
-                    # Fallback to SFD
                     sfd_mod = import_module('dustmaps.sfd')
                     ebv = sfd_mod.SFDQuery()(coords)
-                    self.Av = float(ebv) * 2.742
+                    self.Av = float(ebv) * _AV_PER_EBV_SFD
                 else:
-                    mags = ebvs * 2.742 * 0.884
+                    mags = ebvs * _AV_BAYESTAR_FACTOR
                     self.Av = float(mags[1])
             elif dustmap in ('Planck13', 'Planck16'):
                 ebv = dmap(coords)
-                self.Av = float(ebv) * 3.1
-        except Exception:
-            self.Av = 0.1
+                self.Av = float(ebv) * _AV_PER_EBV_PLANCK
+        except Exception as e:
+            logger.warning("Dustmap '%s' query failed (%s); using fallback Av=%.2f",
+                           dustmap, e, _AV_FALLBACK)
+            self.Av = _AV_FALLBACK
 
     @classmethod
     def from_ariadne_star(cls, ariadne_star, verbose: bool = True):

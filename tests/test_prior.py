@@ -3,14 +3,14 @@
 import numpy as np
 import pytest
 
-from lachesis.prior import IsochonePrior, kroupa_imf
+from lachesis.prior import IsochronePrior, kroupa_imf
 
 
-class TestIsochonePrior:
+class TestIsochronePrior:
     """Test prior for (eep, log_age, feh) parameter space."""
 
     def test_construct_default(self):
-        prior = IsochonePrior(
+        prior = IsochronePrior(
             eep_range=(1, 808),
             age_range=(5.0, 10.3),
             feh_range=(-4.0, 0.5),
@@ -19,7 +19,7 @@ class TestIsochonePrior:
 
     def test_prior_transform_maps_unit_cube(self):
         """prior_transform maps [0,1]^3 → physical parameter space."""
-        prior = IsochonePrior(
+        prior = IsochronePrior(
             eep_range=(1, 808),
             age_range=(5.0, 10.3),
             feh_range=(-4.0, 0.5),
@@ -37,7 +37,7 @@ class TestIsochonePrior:
 
     def test_prior_transform_midpoint(self):
         """Midpoint of unit cube → midpoint of parameter space."""
-        prior = IsochonePrior(
+        prior = IsochronePrior(
             eep_range=(0, 1000),
             age_range=(5.0, 10.0),
             feh_range=(-2.0, 0.0),
@@ -49,7 +49,7 @@ class TestIsochonePrior:
 
     def test_log_prior_in_bounds(self):
         """In-bounds point should give finite log-prior."""
-        prior = IsochonePrior(
+        prior = IsochronePrior(
             eep_range=(1, 808),
             age_range=(5.0, 10.3),
             feh_range=(-4.0, 0.5),
@@ -59,7 +59,7 @@ class TestIsochonePrior:
 
     def test_log_prior_out_of_bounds(self):
         """Out-of-bounds point should give -inf."""
-        prior = IsochonePrior(
+        prior = IsochronePrior(
             eep_range=(1, 808),
             age_range=(5.0, 10.3),
             feh_range=(-4.0, 0.5),
@@ -70,7 +70,7 @@ class TestIsochonePrior:
 
     def test_gaussian_feh_prior(self):
         """Gaussian [Fe/H] prior: closer to mean should give higher prior."""
-        prior = IsochonePrior(
+        prior = IsochronePrior(
             eep_range=(1, 808),
             age_range=(5.0, 10.3),
             feh_range=(-4.0, 0.5),
@@ -82,7 +82,7 @@ class TestIsochonePrior:
 
     def test_with_dm_deep(self):
         """When dm_deep is provided, it should affect the prior (IMF weighting)."""
-        prior = IsochonePrior(
+        prior = IsochronePrior(
             eep_range=(1, 808),
             age_range=(5.0, 10.3),
             feh_range=(-4.0, 0.5),
@@ -121,7 +121,7 @@ class TestIsochonePrior:
 
     def test_kroupa_imf_selectable(self):
         """Kroupa IMF should be selectable via the imf kwarg."""
-        prior = IsochonePrior(
+        prior = IsochronePrior(
             eep_range=(1, 808),
             age_range=(5.0, 10.3),
             feh_range=(-4.0, 0.5),
@@ -134,7 +134,7 @@ class TestIsochonePrior:
         assert np.isfinite(lnp)
 
     def test_param_names(self):
-        prior = IsochonePrior(
+        prior = IsochronePrior(
             eep_range=(1, 808),
             age_range=(5.0, 10.3),
             feh_range=(-4.0, 0.5),

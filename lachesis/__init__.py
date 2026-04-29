@@ -1,6 +1,6 @@
 """LACHESIS — Isochrone fitting with Bayesian Model Averaging."""
 
-__version__ = "0.0.2"
+__version__ = "0.0.4"
 
 from lachesis.star import Star
 from lachesis.fitter import Fitter
@@ -46,23 +46,34 @@ def fit(starname, ra=None, dec=None, gaia_id=None,
         star = starname
     else:
         if ra is None or dec is None:
-            # Resolve coordinates from name via Simbad
+            # Resolve coordinates from name via Simbad with a hard timeout.
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
             from astropy.coordinates import SkyCoord
-            coord = SkyCoord.from_name(starname)
+            from astropy.coordinates.name_resolve import NameResolveError
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                try:
+                    coord = pool.submit(SkyCoord.from_name, starname).result(timeout=30)
+                except (FuturesTimeout, NameResolveError) as e:
+                    raise ValueError(
+                        f"Could not resolve '{starname}' via Simbad: {e}"
+                    )
             ra, dec = coord.ra.deg, coord.dec.deg
             # Try to get Gaia DR3 ID from Simbad if not provided
             if gaia_id is None:
                 try:
                     from astroquery.simbad import Simbad
                     ids = Simbad.query_objectids(starname)
-                    if ids is not None:
+                    if ids is not None and "ID" in ids.colnames:
                         for row in ids:
-                            rid = str(row[0]) if hasattr(row, '__getitem__') else str(row)
-                            if 'Gaia DR3' in rid:
+                            rid = str(row["ID"])
+                            if "Gaia DR3" in rid:
                                 gaia_id = int(rid.split()[-1])
                                 break
-                except Exception:
-                    pass
+                except (NameResolveError, ValueError, KeyError) as e:
+                    # Simbad lookup failed for the Gaia ID; carry on with
+                    # ra/dec only.
+                    import warnings
+                    warnings.warn(f"Simbad ID lookup failed: {e}", stacklevel=2)
         star = Star(starname, ra, dec, g_id=gaia_id, verbose=verbose)
 
     f = Fitter()

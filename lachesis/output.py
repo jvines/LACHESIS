@@ -3,6 +3,26 @@
 import numpy as np
 
 
+def _lachesis_version() -> str:
+    # Deferred import to avoid the lachesis package importing itself
+    # during package load (output is imported by fitter, which is in __init__).
+    from lachesis import __version__
+    return __version__
+
+
+def _samples_to_param_dict(samples: np.ndarray, param_names: list[str]) -> dict:
+    """Map a (n, ndim) sample array to a dict keyed by prior.param_names.
+
+    Each value is shaped (1, n) for arviz (chain, draw)."""
+    out = {}
+    for i, name in enumerate(param_names):
+        out[name] = samples[:, i].reshape(1, -1)
+    if "log_age" in param_names:
+        i = param_names.index("log_age")
+        out["age"] = (10.0 ** samples[:, i] / 1e9).reshape(1, -1)
+    return out
+
+
 def to_inference_data(
     fit_result: dict | None = None,
     bma_result=None,
@@ -14,60 +34,60 @@ def to_inference_data(
 ):
     """Convert fit results to arviz InferenceData.
 
-    Follows ARIADNE's .nc structure:
-    - posterior: combined samples
-    - observed_data: input observations
-    - constant_data: evidence, weights, metadata
-    - posterior_{grid}: per-grid posteriors (if BMA)
+    Single-grid: stores `posterior` + `observed_data` + `constant_data`.
+    BMA: same plus per-sample `model` array in `posterior` (string labels)
+    so per-grid posteriors can be reconstructed on load by filtering.
+    Per-grid raw posteriors are also written to dedicated groups via
+    `idata.add_groups(posterior_<grid>=...)` for arviz≥0.16 compatibility.
     """
     import arviz as az
     import xarray as xr
 
-    # Determine source
     if bma_result is not None:
         samples = bma_result.samples
         derived = bma_result.derived
-        logz = float(bma_result.log_evidences.max())
+        logz = float(bma_result.log_evidence)
+        # Pull param_names from the first per-grid result; BMA-combined
+        # samples share the same column order across grids.
+        if per_grid_results:
+            first_key = next(iter(per_grid_results))
+            param_names = per_grid_results[first_key].get("param_names")
+        else:
+            param_names = None
     elif fit_result is not None:
         samples = fit_result["samples"]
         derived = fit_result["derived"]
         logz = float(fit_result["logz"])
+        param_names = fit_result.get("param_names")
     else:
         raise ValueError("Provide fit_result or bma_result")
 
+    if param_names is None:
+        # Backward-compatible inference: assume the legacy column order.
+        param_names = ["eep", "log_age", "feh"]
+        ndim = samples.shape[1]
+        if ndim >= 5:
+            param_names += ["distance", "Av"]
+        elif ndim == 4:
+            param_names.append("distance")
+
     n = len(samples)
 
-    # Build posterior dict
-    posterior = {}
-    # Free parameters (columns of samples array)
-    if samples.shape[1] >= 3:
-        posterior["eep"] = samples[:, 0].reshape(1, -1)
-        posterior["log_age"] = samples[:, 1].reshape(1, -1)
-        posterior["feh"] = samples[:, 2].reshape(1, -1)
-        # Derived: age in Gyr
-        posterior["age"] = (10.0 ** samples[:, 1] / 1e9).reshape(1, -1)
+    posterior = _samples_to_param_dict(samples, param_names)
 
-    if samples.shape[1] >= 4:
-        # Could be eep_secondary or distance depending on mode
-        pass
-    if samples.shape[1] >= 5:
-        posterior["distance"] = samples[:, 3].reshape(1, -1)
-        posterior["Av"] = samples[:, 4].reshape(1, -1)
-
-    # Derived quantities from grid.
-    # Note: derived["model"] (per-sample string labels tagging which grid
-    # each sample came from) is reconstructed on load from the per-grid
-    # posterior groups, so we don't need to store it here.
+    # Derived quantities from grid + per-sample model labels (BMA only).
     for key, vals in derived.items():
         if key == "model":
+            if isinstance(vals, np.ndarray) and len(vals) == n:
+                # Store labels as a fixed-width unicode array; arviz/netCDF4
+                # serialises this as a string variable.
+                posterior["model"] = np.array(vals, dtype="U").reshape(1, -1)
             continue
         if isinstance(vals, np.ndarray) and len(vals) == n:
-            out_key = _rename_key(key)
-            posterior[out_key] = vals.reshape(1, -1)
+            posterior[_rename_key(key)] = vals.reshape(1, -1)
 
     data = {"posterior": posterior}
 
-    # Observed data
     if observed:
         obs_data = {}
         for k, v in observed.items():
@@ -77,7 +97,6 @@ def to_inference_data(
                 obs_data[f"{k}_err"] = np.array([v])
         data["observed_data"] = obs_data
 
-    # Constant data
     const = {"grid_name": np.array([grid_name])}
     if bma_result is not None:
         const["log_evidence"] = bma_result.log_evidences
@@ -86,10 +105,6 @@ def to_inference_data(
     else:
         const["log_evidence"] = np.array([logz])
 
-    # Store ARIADNE-derived stellar params (Teff, radius, luminosity) when
-    # available. These are better constrained by the SED fit than by
-    # isochrone grid interpolation, so the plotter uses them for the star
-    # position on the HR diagram when present.
     if star is not None:
         if getattr(star, "teff", None) is not None:
             const["ariadne_teff"] = np.array([star.teff])
@@ -102,45 +117,42 @@ def to_inference_data(
 
     data["constant_data"] = const
 
-    # Per-grid posteriors (BMA). These carry the full per-grid sample arrays
-    # so the plotter can reconstruct per-model histograms, HR tracks, etc.
+    idata = az.from_dict(data)
+
+    # Per-grid posteriors as their own groups. arviz from_dict only knows the
+    # standard groups, so we attach extras via xarray Datasets after init.
     if per_grid_results:
         for gname, gresult in per_grid_results.items():
             gs = gresult["samples"]
             gd = gresult["derived"]
-            grid_post = {
-                "eep": gs[:, 0].reshape(1, -1),
-                "log_age": gs[:, 1].reshape(1, -1),
-                "feh": gs[:, 2].reshape(1, -1),
-                "age": (10.0 ** gs[:, 1] / 1e9).reshape(1, -1),
-            }
-            if gs.shape[1] >= 5:
-                grid_post["distance"] = gs[:, 3].reshape(1, -1)
-                grid_post["Av"] = gs[:, 4].reshape(1, -1)
+            gnames = gresult.get("param_names", param_names)
+            grid_post = _samples_to_param_dict(gs, gnames)
             for key, vals in gd.items():
                 if key == "model":
                     continue
                 if isinstance(vals, np.ndarray) and len(vals) == len(gs):
                     grid_post[_rename_key(key)] = vals.reshape(1, -1)
-            data[f"posterior_{gname}"] = grid_post
+            ds = xr.Dataset(
+                {k: (["chain", "draw"], v) for k, v in grid_post.items()}
+            )
+            idata.add_groups({f"posterior_{gname}": ds})
 
-    idata = az.from_dict(data)
-
-    # Store evidence in attrs
     idata.attrs["log_evidence"] = logz
     idata.attrs["grid_name"] = grid_name
-    idata.attrs["lachesis_version"] = "0.1.0"
+    idata.attrs["lachesis_version"] = _lachesis_version()
 
     return idata
 
 
-def save_summary_dat(path: str, result: dict):
+def save_summary_dat(path: str, result: dict, param_names: list[str] | None = None):
     """Save parameter summary as text file (ARIADNE-compatible format).
 
     Columns: median, +1σ, -1σ, 1σ CI lo, 1σ CI hi, 3σ CI lo, 3σ CI hi.
     """
     samples = result["samples"]
     derived = result["derived"]
+    if param_names is None:
+        param_names = result.get("param_names")
 
     with open(path, "w") as f:
         f.write(
@@ -148,20 +160,17 @@ def save_summary_dat(path: str, result: dict):
             "\t1sig_lo\t1sig_hi\t3sig_lo\t3sig_hi\n"
         )
 
-        # Age
-        if samples.shape[1] >= 3:
-            ages = 10.0 ** samples[:, 1] / 1e9
+        if "log_age" in (param_names or []):
+            i = param_names.index("log_age")
+            ages = 10.0 ** samples[:, i] / 1e9
             _write_param(f, "Age(Gyr)", ages)
 
-        # Mass is the CURRENT mass (post mass-loss), not ZAMS.
-        # Key is `star_mass` in-memory and `mass` after .nc round-trip.
         mass_arr = derived.get("star_mass", derived.get("mass"))
         if mass_arr is not None:
             _write_param(f, "Mass(Msun)", mass_arr)
 
         if "Teff" in derived:
             _write_param(f, "Teff(K)", derived["Teff"])
-        # log_g is `log_g` in-memory, `logg` after .nc round-trip
         logg_arr = derived.get("log_g", derived.get("logg"))
         if logg_arr is not None:
             _write_param(f, "logg", logg_arr)
@@ -173,18 +182,19 @@ def save_summary_dat(path: str, result: dict):
         if "density" in derived:
             _write_param(f, "Density(g/cc)", derived["density"])
 
-        # [Fe/H] is sampled directly (column 2)
-        if samples.shape[1] >= 3:
-            _write_param(f, "[Fe/H]", samples[:, 2])
-
-        # Distance and Av are only present in photometric mode (col 3, 4)
-        if samples.shape[1] >= 5:
-            _write_param(f, "Distance(pc)", samples[:, 3])
-            _write_param(f, "Av(mag)", samples[:, 4])
-
-        # EEP
-        if samples.shape[1] >= 3:
-            _write_param(f, "EEP", samples[:, 0])
+        if param_names:
+            label_for = {
+                "feh": "[Fe/H]",
+                "distance": "Distance(pc)",
+                "Av": "Av(mag)",
+                "eep": "EEP",
+                "eep_secondary": "EEP_secondary",
+                "vini": "Vini(km/s)",
+            }
+            for i, name in enumerate(param_names):
+                if name == "log_age":
+                    continue
+                _write_param(f, label_for.get(name, name), samples[:, i])
 
 
 def save_model_weights(path: str, bma_result):

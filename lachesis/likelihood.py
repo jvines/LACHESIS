@@ -34,18 +34,18 @@ def log_likelihood(
     If ``predicted`` is passed, skips the grid interpolation (avoids double work
     when the caller already interpolated for the prior).
     """
-    if set(observed) != set(uncertainties):
+    missing_unc = set(observed) - set(uncertainties)
+    if missing_unc:
         raise ValueError(
-            f"observed and uncertainties must have same keys. "
-            f"Got {set(observed)} vs {set(uncertainties)}"
+            f"observed keys without matching uncertainties: {sorted(missing_unc)}"
         )
 
     # Get predicted values from grid (skip if caller already did it)
     if predicted is None:
         predicted = interp(eep=eep, log_age=log_age, feh=feh)
 
-    # Check for NaN (out-of-bounds)
-    if np.isnan(predicted.get("log_Teff", 0.0)):
+    # Check for NaN / missing log_Teff (out-of-bounds or grid lacks the column)
+    if not np.isfinite(predicted.get("log_Teff", np.nan)):
         return -np.inf
 
     # Determine which observables are photometric bands
@@ -64,10 +64,13 @@ def log_likelihood(
     if bc_table is not None and any(k in phot_bands for k in observed):
         if distance is None or distance <= 0:
             return -np.inf
-        teff = predicted.get("Teff", 10.0 ** predicted.get("log_Teff", np.nan))
+        teff = predicted.get("Teff")
+        if teff is None or not np.isfinite(teff):
+            log_t = predicted.get("log_Teff", np.nan)
+            teff = 10.0 ** log_t if np.isfinite(log_t) else np.nan
         logg = predicted.get("log_g", np.nan)
         mbol = predicted.get("Mbol", np.nan)
-        if np.isnan(teff) or np.isnan(logg) or np.isnan(mbol):
+        if not (np.isfinite(teff) and np.isfinite(logg) and np.isfinite(mbol)):
             return -np.inf
         av_val = av if av is not None else 0.0
         pred_mags = bc_table.get_apparent_mag(

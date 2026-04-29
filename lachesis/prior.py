@@ -7,6 +7,20 @@ evolutionary states.
 """
 
 import numpy as np
+from scipy.special import ndtr, ndtri
+
+
+def _truncated_normal_ppf(u, mean, sigma, lo, hi):
+    """Truncated-normal inverse CDF.
+
+    Maps u in [0, 1] to a sample of N(mean, sigma) restricted to [lo, hi].
+    Avoids the np.clip-on-Gaussian artefact (delta spikes at boundaries).
+    """
+    a = (lo - mean) / sigma
+    b = (hi - mean) / sigma
+    Fa = ndtr(a)
+    Fb = ndtr(b)
+    return mean + sigma * ndtri(Fa + u * (Fb - Fa))
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +115,7 @@ def _feh_prior_rave(feh: float) -> float:
     )
 
 
-class IsochonePrior:
+class IsochronePrior:
     """Prior for the isochrone fitting parameter space.
 
     The EEP prior is P(eep) = IMF(mass) * |dm/dEEP|, not uniform.
@@ -238,9 +252,10 @@ class IsochonePrior:
 
         # [Fe/H] prior
         if self._feh_type == "gaussian":
-            from scipy.special import ndtri
-            theta[2] = self._feh_mean + self._feh_sigma * ndtri(u[2])
-            theta[2] = np.clip(theta[2], self.feh_lo, self.feh_hi)
+            theta[2] = _truncated_normal_ppf(
+                u[2], self._feh_mean, self._feh_sigma,
+                self.feh_lo, self.feh_hi,
+            )
         elif self._feh_type in ("kde", "morton", "rave"):
             # Inverse CDF sampling (KDE, Morton, or RAVE)
             theta[2] = np.interp(u[2], self._feh_cdf_y, self._feh_cdf_x)
@@ -252,9 +267,10 @@ class IsochonePrior:
             theta[idx] = self.eep_lo + u[idx] * (theta[0] - self.eep_lo)
             idx += 1
         if self._has_distance:
-            from scipy.special import ndtri
-            theta[idx] = self._dist_mean + self._dist_sigma * ndtri(u[idx])
-            theta[idx] = np.clip(theta[idx], self.dist_lo, self.dist_hi)
+            theta[idx] = _truncated_normal_ppf(
+                u[idx], self._dist_mean, self._dist_sigma,
+                self.dist_lo, self.dist_hi,
+            )
             idx += 1
         if self._has_av:
             theta[idx] = self.av_lo + u[idx] * (self.av_hi - self.av_lo)
@@ -331,10 +347,12 @@ class IsochonePrior:
 
         # Age prior
         if self._age_type == "uniform":
-            # Flat in linear age: P(log_tau) ∝ 10^log_tau
-            # log density = log_age * ln(10) - log(10^hi - 10^lo)
-            lnp += log_age * np.log(10.0) - np.log(
-                10.0 ** self.age_hi - 10.0 ** self.age_lo
+            # Flat in linear age: P(log_tau) = ln(10) * 10^log_tau / (10^hi - 10^lo)
+            ln10 = np.log(10.0)
+            lnp += (
+                np.log(ln10)
+                + log_age * ln10
+                - np.log(10.0 ** self.age_hi - 10.0 ** self.age_lo)
             )
         else:
             # Flat in log_age
@@ -342,10 +360,14 @@ class IsochonePrior:
 
         # [Fe/H] prior
         if self._feh_type == "gaussian":
+            a = (self.feh_lo - self._feh_mean) / self._feh_sigma
+            b = (self.feh_hi - self._feh_mean) / self._feh_sigma
+            log_norm = np.log(ndtr(b) - ndtr(a))
             lnp += (
                 -0.5 * ((feh - self._feh_mean) / self._feh_sigma) ** 2
                 - np.log(self._feh_sigma)
                 - 0.5 * np.log(2 * np.pi)
+                - log_norm
             )
         elif self._feh_type == "kde":
             pdf = float(self._feh_kde(feh)[0])
@@ -362,13 +384,29 @@ class IsochonePrior:
 
         # Distance prior (truncated normal, like ARIADNE)
         if self._has_distance:
+            a = (self.dist_lo - self._dist_mean) / self._dist_sigma
+            b = (self.dist_hi - self._dist_mean) / self._dist_sigma
+            log_norm = np.log(ndtr(b) - ndtr(a))
             lnp += (
                 -0.5 * ((distance - self._dist_mean) / self._dist_sigma) ** 2
                 - np.log(self._dist_sigma)
                 - 0.5 * np.log(2 * np.pi)
+                - log_norm
             )
         # Av prior (uniform)
         if self._has_av:
             lnp += -np.log(self.av_hi - self.av_lo)
 
         return lnp
+
+
+def __getattr__(name):
+    # Deprecated alias for the old misspelled class name.
+    if name == "IsochonePrior":
+        import warnings
+        warnings.warn(
+            "IsochonePrior is deprecated; use IsochronePrior instead.",
+            DeprecationWarning, stacklevel=2,
+        )
+        return IsochronePrior
+    raise AttributeError(name)

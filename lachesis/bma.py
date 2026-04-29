@@ -10,8 +10,11 @@ combine posteriors weighted by evidence:
 where Z_k = exp(logz_k) is the evidence for grid k.
 """
 
-import numpy as np
+import warnings
 from dataclasses import dataclass
+
+import numpy as np
+from scipy.special import logsumexp
 
 
 @dataclass
@@ -22,6 +25,7 @@ class BMAResult:
     derived: dict                # combined derived quantities + "model" labels
     model_names: list[str]       # names of each model
     log_evidences: np.ndarray    # (n_models,) log-evidence per model
+    log_evidence: float = 0.0    # combined BMA log-evidence: logsumexp(log_z) - log(K)
     # Optional per-grid raw nested-sampling posteriors, keyed by model name.
     # These are the unweighted per-grid outputs — used by the plotter for
     # per-model histograms, HR tracks, etc. `samples`/`derived` above are
@@ -33,6 +37,7 @@ class BMAResult:
 def bayesian_model_average(
     results: list[dict],
     names: list[str] | None = None,
+    rng: np.random.Generator | None = None,
 ) -> BMAResult:
     """Combine nested sampling results via Bayesian Model Averaging.
 
@@ -41,6 +46,7 @@ def bayesian_model_average(
     results : list of fit result dicts (from IsochroneFitter.fit())
         Each must have: "samples", "logz", "logzerr", "derived"
     names : optional model names (e.g., ["MIST", "PARSEC"])
+    rng : optional numpy Generator. Pass to make BMA reproducible.
 
     Returns
     -------
@@ -49,6 +55,8 @@ def bayesian_model_average(
     n_models = len(results)
     if names is None:
         names = [f"model_{i}" for i in range(n_models)]
+    if rng is None:
+        rng = np.random.default_rng()
 
     # Evidence weights
     log_z = np.array([r["logz"] for r in results])
@@ -56,6 +64,20 @@ def bayesian_model_average(
     log_z_max = log_z.max()
     weights = np.exp(log_z - log_z_max)
     weights /= weights.sum()
+
+    # Combined BMA log-evidence assuming equal model priors:
+    #   log Z_BMA = logsumexp(log Z_k) - log K
+    log_evidence = float(logsumexp(log_z) - np.log(n_models))
+
+    if weights.max() > 0.99 and n_models > 1:
+        dominant = names[int(weights.argmax())]
+        warnings.warn(
+            f"BMA weights collapsed to a one-hot on '{dominant}' "
+            f"(max weight {weights.max():.4f}); BMA degenerates to model "
+            f"selection here. Inspect log-evidence spread before trusting "
+            f"the combined posterior.",
+            stacklevel=2,
+        )
 
     # Resample from each model proportional to its weight
     total_samples = sum(len(r["samples"]) for r in results)
@@ -67,22 +89,26 @@ def bayesian_model_average(
     all_derived = {}
     all_model_labels = []
 
-    # Collect derived keys common to ALL results
-    derived_keys = set(results[0]["derived"].keys())
-    for r in results[1:]:
-        derived_keys &= set(r["derived"].keys())
+    # Collect derived keys common to ALL results, plus warn on dropped keys.
+    per_grid_keys = [set(r["derived"].keys()) for r in results]
+    derived_keys = set.intersection(*per_grid_keys)
+    dropped = set.union(*per_grid_keys) - derived_keys
+    if dropped:
+        warnings.warn(
+            f"BMA dropping derived keys present in only some grids: "
+            f"{sorted(dropped)}",
+            stacklevel=2,
+        )
     derived_keys = sorted(derived_keys)
 
-    for ki, (result, name, n_draw) in enumerate(
-        zip(results, names, n_per_model)
-    ):
+    for result, name, n_draw in zip(results, names, n_per_model):
         samples = result["samples"]
         derived = result["derived"]
 
         if n_draw >= len(samples):
             idx = np.arange(len(samples))
         else:
-            idx = np.random.choice(len(samples), size=n_draw, replace=False)
+            idx = rng.choice(len(samples), size=n_draw, replace=False)
 
         all_samples.append(samples[idx])
         all_model_labels.extend([name] * len(idx))
@@ -104,10 +130,16 @@ def bayesian_model_average(
         combined_derived[key] = np.concatenate(all_derived[key])
     combined_derived["model"] = np.array(all_model_labels)
 
+    per_grid_samples = {n: r["samples"] for n, r in zip(names, results)}
+    per_grid_derived = {n: r["derived"] for n, r in zip(names, results)}
+
     return BMAResult(
         weights=weights,
         samples=combined_samples,
         derived=combined_derived,
         model_names=names,
         log_evidences=log_z,
+        log_evidence=log_evidence,
+        per_grid_samples=per_grid_samples,
+        per_grid_derived=per_grid_derived,
     )

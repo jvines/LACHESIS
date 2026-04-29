@@ -103,6 +103,7 @@ def _extract_from(samples, derived, name):
         "log_L": "logL", "logL": "log_L",
         "log_g": "logg", "logg": "log_g",
         "log_R": "logR", "logR": "log_R",
+        "mass": "star_mass", "star_mass": "mass",
     }
     alt = _aliases.get(name)
     if alt and alt in derived:
@@ -184,15 +185,21 @@ def _make_transparent_cmap(hex_color):
 
 
 def _finalize(fig, filename, dpi=150):
-    """Save (PDF or PNG) or show; return the figure."""
+    """Save (PDF or PNG) or return; closes the figure when saving.
+
+    Without the explicit close, batch runs over many stars accumulate
+    matplotlib figures and trip the 20-figure RuntimeWarning.
+    """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         try:
             fig.tight_layout()
-        except Exception:
+        except (ValueError, RuntimeError):
             pass
     if filename is not None:
         fig.savefig(filename, dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+        return None
     return fig
 
 
@@ -271,16 +278,22 @@ class ISOPlotter:
 
         def _ds_to_samples_and_derived(ds):
             cols = []
-            for k in ("eep", "log_age", "feh", "distance", "Av"):
+            for k in ("eep", "log_age", "feh", "eep_secondary", "distance", "Av", "vini"):
                 if k in ds:
                     cols.append(ds[k].values.flatten())
             samples = np.column_stack(cols) if cols else np.empty((0, 0))
             derived = {}
+            model_arr = None
             for var in ds.data_vars:
-                if var not in _SKIP_DERIVED:
+                if var == "model":
+                    model_arr = ds[var].values.flatten()
+                    continue
+                if var not in _SKIP_DERIVED and var != "eep_secondary" and var != "vini":
                     derived[var] = ds[var].values.flatten()
             if "age" in ds:
                 derived["age_gyr"] = ds["age"].values.flatten()
+            if model_arr is not None:
+                derived["model"] = np.array([str(m) for m in model_arr])
             return samples, derived
 
         post = _group_ds(idata.posterior)
@@ -326,54 +339,12 @@ class ISOPlotter:
             per_grid_samples[name] = s
             per_grid_derived[name] = d
 
-        # The combined posterior loaded above is BMA-weighted but doesn't
-        # carry per-sample `model` labels (the writer drops them). Rather
-        # than rely on the combined group at all, we REBUILD the combined
-        # samples from the per-grid groups using the BMA weights directly
-        # so the model labels are exact. This matches the in-memory
-        # `bayesian_model_average` logic: sample n_k = round(w_k * total)
-        # rows per grid and concatenate in model_names order.
-        if per_grid_samples:
-            total_per_grid = sum(
-                len(per_grid_samples[n]) for n in per_grid_samples
-            )
-            n_per_model = np.round(weights * total_per_grid).astype(int)
-            n_per_model = np.maximum(
-                n_per_model, (weights > 0).astype(int)
-            )
-
-            rng = np.random.default_rng()
-            new_samples_list = []
-            new_derived_lists = {}
-            model_labels = []
-            for name, n in zip(names, n_per_model):
-                if name not in per_grid_samples or n == 0:
-                    continue
-                s = per_grid_samples[name]
-                d = per_grid_derived[name]
-                n_take = int(n)
-                # Use replace=True so we faithfully reproduce BMA-weighted
-                # counts even when a grid's per-grid posterior has fewer
-                # raw samples than its share of the total.
-                idx = rng.choice(len(s), size=n_take, replace=True)
-                new_samples_list.append(s[idx])
-                for k, v in d.items():
-                    new_derived_lists.setdefault(k, []).append(v[idx])
-                model_labels.extend([name] * n_take)
-
-            if new_samples_list:
-                samples = np.concatenate(new_samples_list, axis=0)
-                # Keep only derived keys present in EVERY grid so all
-                # concatenations have the same length
-                valid_keys = [
-                    k for k, lst in new_derived_lists.items()
-                    if len(lst) == len(new_samples_list)
-                ]
-                derived = {
-                    k: np.concatenate(new_derived_lists[k])
-                    for k in valid_keys
-                }
-                derived["model"] = np.array(model_labels)
+        # The combined `posterior` group is the source of truth — it carries
+        # the BMA-weighted draws and per-sample `model` labels exactly as
+        # `bayesian_model_average` produced them. Don't resample here.
+        log_evidence = float(getattr(idata, "attrs", {}).get(
+            "log_evidence", float(np.max(log_ev))
+        ))
 
         result = BMAResult(
             weights=weights,
@@ -381,6 +352,7 @@ class ISOPlotter:
             derived=derived,
             model_names=names,
             log_evidences=log_ev,
+            log_evidence=log_evidence,
             per_grid_samples=per_grid_samples,
             per_grid_derived=per_grid_derived,
         )

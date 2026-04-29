@@ -13,8 +13,10 @@ import numba as nb
 def _searchsorted(arr, val):
     """Binary search returning index of interval containing val.
     Returns i such that arr[i] <= val < arr[i+1].
-    Returns -1 if val < arr[0], len(arr)-1 if val >= arr[-1].
+    Returns -1 if val is non-finite or out of [arr[0], arr[-1]].
     """
+    if not np.isfinite(val):
+        return -1
     n = len(arr)
     if val < arr[0] or val > arr[n - 1]:
         return -1
@@ -189,10 +191,17 @@ def _quadlinear_batch(grid, ax0, ax1, ax2, ax3, x0s, x1s, x2s, x3s, n_cols):
     return result
 
 
-def _pad_axis(arr, data, axis):
-    """Pad a length-1 axis to length 2 for interpolation."""
+def _pad_axis(arr, data, axis, half_width: float = 5.0):
+    """Pad a length-1 axis to length 2 so the interpolator has an interval.
+
+    The duplicated slice represents a constant-along-axis grid; widening the
+    pad keeps queries inside the interpolation interval for any plausible
+    coordinate value (single-feh grids would otherwise NaN outside ±0.01).
+    Memory is doubled along the affected axis only when padding is needed,
+    not unconditionally.
+    """
     if len(arr) == 1:
-        arr = np.array([arr[0] - 0.01, arr[0] + 0.01])
+        arr = np.array([arr[0] - half_width, arr[0] + half_width])
         data = np.concatenate([data, data], axis=axis)
     return arr, data
 
