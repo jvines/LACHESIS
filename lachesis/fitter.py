@@ -429,8 +429,8 @@ class Fitter:
                     print(colored(f"{t3}{'feh':12s}  U({p.feh_lo:.2f}, {p.feh_hi:.2f})", c))
             elif name == "distance":
                 print(colored(f"{t3}{'distance':12s}  N({p._dist_mean:.3f}, {p._dist_sigma:.3f})", c))
-            elif name == "av":
-                print(colored(f"{t3}{'av':12s}  U({p.av_lo:.2f}, {p.av_hi:.2f})", c))
+            elif name == "Av":
+                print(colored(f"{t3}{'Av':12s}  U({p.av_lo:.2f}, {p.av_hi:.2f})", c))
             elif name == "eep_secondary":
                 print(colored(f"{t3}{'eep_2nd':12s}  U({p.eep_lo:.0f}, eep_primary)", c))
             elif name == "vini":

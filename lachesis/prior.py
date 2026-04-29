@@ -225,7 +225,7 @@ class IsochronePrior:
         if self._has_distance:
             names.append("distance")
         if self._has_av:
-            names.append("av")
+            names.append("Av")
         if self._has_vini:
             names.append("vini")
         return names
