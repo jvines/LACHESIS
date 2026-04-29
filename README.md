@@ -15,7 +15,7 @@ require isochrone models.
 # Installation
 
 ```bash
-pip install lachesis
+pip install astroLACHESIS
 ```
 
 For development:
