@@ -1,19 +1,29 @@
 """Paths and constants."""
 
+import os
 from pathlib import Path
 
 # Package data directories
 _PACKAGE_DIR = Path(__file__).resolve().parent
 DATAFILES_DIR = _PACKAGE_DIR / "Datafiles"
-BC_DIR = DATAFILES_DIR / "BC_tables"
+BC_DIR = Path(os.environ.get("LACHESIS_BC_DIR", DATAFILES_DIR / "BC_tables"))
 
-# Grids come from the lachesis-grids package
-try:
-    from lachesis_grids import grid_path as _grid_path
-    GRID_DIR = _grid_path("mist_v1.2_vvcrit0.4.h5").parent
-except ImportError:
-    # Fallback to local Datafiles for development
-    GRID_DIR = DATAFILES_DIR / "grids"
+
+def _resolve_grid_dir() -> Path:
+    """LACHESIS_GRID_DIR takes precedence over the lachesis_grids package."""
+    env_dir = os.environ.get("LACHESIS_GRID_DIR")
+    if env_dir:
+        return Path(env_dir)
+    try:
+        from lachesis_grids import grid_path as _grid_path
+        return _grid_path("mist_v1.2_vvcrit0.4.h5").parent
+    except (ImportError, Exception):
+        # ImportError: package not installed.
+        # Other exceptions: package present but the requested grid is not.
+        return DATAFILES_DIR / "grids"
+
+
+GRID_DIR = _resolve_grid_dir()
 
 # MIST EEP phase boundaries
 EEP_PHASES = {

@@ -7,13 +7,15 @@ import pytest
 
 from lachesis.grid.parsec import PARSECModelGrid
 
-PARSEC_DIR = Path("/Users/jayvains/github/personal/LACHESIS/data/parsec/raw")
+from tests.conftest import parsec_raw_dir
+
+PARSEC_DIR = parsec_raw_dir()
 
 
 @pytest.fixture(scope="module")
 def parsec_grid():
-    if not PARSEC_DIR.exists() or not list(PARSEC_DIR.glob("*.csv")):
-        pytest.skip("PARSEC data not downloaded")
+    if PARSEC_DIR is None:
+        pytest.skip("PARSEC raw data not available; set LACHESIS_PARSEC_DIR")
     return PARSECModelGrid(PARSEC_DIR)
 
 

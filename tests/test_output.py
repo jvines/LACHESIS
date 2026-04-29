@@ -9,13 +9,15 @@ from lachesis.grid.mist import MISTModelGrid
 from lachesis.interp import GridInterpolator
 from lachesis.sampler import IsochroneFitter
 
-FULL_GRID_H5 = Path(__file__).parents[2] / "data" / "mist" / "grids" / "mist_v1.2_vvcrit0.4.h5"
+from tests.conftest import mist_h5_path
+
+FULL_GRID_H5 = mist_h5_path()
 
 
 @pytest.fixture(scope="module")
 def fit_result():
-    if not FULL_GRID_H5.exists():
-        pytest.skip("Full grid not built yet")
+    if FULL_GRID_H5 is None:
+        pytest.skip("MIST grid not available; install lachesis-grids or set LACHESIS_GRID_DIR")
     mg = MISTModelGrid.from_hdf5(FULL_GRID_H5)
     interp = GridInterpolator(mg)
     fitter = IsochroneFitter(
