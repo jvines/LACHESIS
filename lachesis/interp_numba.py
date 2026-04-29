@@ -7,6 +7,7 @@ for repeated scalar evaluations (nested sampling inner loop).
 
 import numpy as np
 import numba as nb
+from numba import prange
 
 
 @nb.njit(cache=True)
@@ -111,12 +112,12 @@ def _trilinear(grid, ax0, ax1, ax2, x0, x1, x2, n_cols):
     return result
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, parallel=True)
 def _trilinear_batch(grid, ax0, ax1, ax2, x0s, x1s, x2s, n_cols):
-    """Vectorized trilinear interpolation."""
+    """Vectorised trilinear interpolation; parallel over batch rows."""
     n = len(x0s)
     result = np.empty((n, n_cols))
-    for i in range(n):
+    for i in prange(n):
         result[i] = _trilinear(grid, ax0, ax1, ax2, x0s[i], x1s[i], x2s[i], n_cols)
     return result
 
@@ -178,12 +179,12 @@ def _quadlinear(grid, ax0, ax1, ax2, ax3, x0, x1, x2, x3, n_cols):
     return result
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=True, parallel=True)
 def _quadlinear_batch(grid, ax0, ax1, ax2, ax3, x0s, x1s, x2s, x3s, n_cols):
-    """Vectorized quadrilinear interpolation."""
+    """Vectorised quadrilinear interpolation; parallel over batch rows."""
     n = len(x0s)
     result = np.empty((n, n_cols))
-    for i in range(n):
+    for i in prange(n):
         result[i] = _quadlinear(
             grid, ax0, ax1, ax2, ax3,
             x0s[i], x1s[i], x2s[i], x3s[i], n_cols,
