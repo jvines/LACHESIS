@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "astroLACHESIS"
-version = "0.0.7"
+version = "0.0.4"
 description = "Isochrone fitting with Bayesian Model Averaging"
 requires-python = ">=3.11"
 dependencies = [
