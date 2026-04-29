@@ -84,7 +84,7 @@ class IsochroneFitter:
             log_age = params["log_age"]
             feh = params["feh"]
             distance = params.get("distance")
-            av = params.get("av")
+            av = params.get("Av")
             vini = params.get("vini")
 
             # Get grid predictions (needed for both likelihood and IMF prior)
