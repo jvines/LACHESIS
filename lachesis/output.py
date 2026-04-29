@@ -119,8 +119,9 @@ def to_inference_data(
 
     idata = az.from_dict(data)
 
-    # Per-grid posteriors as their own groups. arviz from_dict only knows the
-    # standard groups, so we attach extras via xarray Datasets after init.
+    # Per-grid posteriors as their own groups. arviz>=1.0 surfaces
+    # InferenceData as an xarray DataTree, so we attach extras via
+    # __setitem__ instead of the older add_groups API.
     if per_grid_results:
         for gname, gresult in per_grid_results.items():
             gs = gresult["samples"]
@@ -135,7 +136,11 @@ def to_inference_data(
             ds = xr.Dataset(
                 {k: (["chain", "draw"], v) for k, v in grid_post.items()}
             )
-            idata.add_groups({f"posterior_{gname}": ds})
+            try:
+                idata[f"posterior_{gname}"] = ds
+            except Exception:
+                # Older arviz: use add_groups when __setitem__ is not supported.
+                idata.add_groups({f"posterior_{gname}": ds})
 
     idata.attrs["log_evidence"] = logz
     idata.attrs["grid_name"] = grid_name
