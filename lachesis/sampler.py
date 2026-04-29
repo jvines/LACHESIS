@@ -7,6 +7,7 @@ analytic priors, the IMF*dm_deep weight is folded into the log-likelihood.
 
 import numpy as np
 
+from lachesis.binary import binary_log_likelihood
 from lachesis.interp import GridInterpolator
 from lachesis.likelihood import log_likelihood
 from lachesis.prior import IsochronePrior
@@ -61,6 +62,7 @@ class IsochroneFitter:
         uncertainties: dict[str, float],
         nlive: int = 500,
         dlogz: float = 0.01,
+        verbose: bool = True,
         **dynesty_kwargs,
     ) -> dict:
         """Run nested sampling."""
@@ -125,7 +127,6 @@ class IsochroneFitter:
 
             # Data likelihood (pass predicted to avoid double interpolation)
             if is_binary:
-                from lachesis.binary import binary_log_likelihood
                 lnl = binary_log_likelihood(
                     interp, bc=bc,
                     eep_primary=eep,
@@ -155,7 +156,7 @@ class IsochroneFitter:
             nlive=nlive,
             **dynesty_kwargs,
         )
-        sampler.run_nested(dlogz=dlogz, print_progress=True)
+        sampler.run_nested(dlogz=dlogz, print_progress=verbose)
         results = sampler.results
 
         weights = np.exp(results.logwt - results.logz[-1])

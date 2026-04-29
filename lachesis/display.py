@@ -1,10 +1,12 @@
 """Console display functions — matching ARIADNE's output style."""
 
+import os
 import random
+import sys
 import time
 
 import numpy as np
-from termcolor import colored
+from termcolor import colored as _termcolor_colored
 
 from lachesis.config import EEP_PHASES
 
@@ -13,8 +15,27 @@ _T2 = "\t\t"      # section headers (banner box, routine header)
 _T3 = "\t\t\t"    # detail lines (author, params)
 
 
+def _color_enabled() -> bool:
+    """Honour NO_COLOR / non-tty / TERM=dumb so logs don't fill with ANSI."""
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("TERM", "") == "dumb":
+        return False
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def colored(text, color=None, *args, **kwargs):
+    """termcolor wrapper that strips colour when output is not a TTY."""
+    if not _color_enabled():
+        return text
+    return _termcolor_colored(text, color, *args, **kwargs)
+
+
 def _pick_color():
-    return random.choice(_COLORS)
+    return random.choice(_COLORS) if _color_enabled() else None
 
 
 def display_retrieved_photometry(star, c=None):
@@ -62,16 +83,6 @@ def display_banner(starname: str, c=None):
     print(colored(f'{_T3}Contact : jose . vines at ug . uchile . cl', c))
     print(colored(f'{_T3}Star : {starname}', c))
     return c
-
-
-def display_star_info(star, c=None):
-    """Print stellar info after photometry — matching ARIADNE's display_star_fin."""
-    if c is None:
-        c = _pick_color()
-    # This block intentionally left empty — all stellar info is now printed
-    # by the Librarian's _print_summary (after the photometry table),
-    # matching ARIADNE's display_star_fin placement.
-    pass
 
 
 def display_routine(fitter):
@@ -146,13 +157,15 @@ def display_summary(samples, derived, param_names):
         med = np.median(arr)
         lo1 = med - np.percentile(arr, 15.87)
         hi1 = np.percentile(arr, 84.13) - med
-        lo3 = np.percentile(arr, 0.13)
-        hi3 = np.percentile(arr, 99.87)
+        lo3 = med - np.percentile(arr, 0.13)
+        hi3 = np.percentile(arr, 99.87) - med
+        # Both 1σ and 3σ columns now report half-widths around the median
+        # (positive numbers); the table header treats them consistently.
         print(colored(fmt.format(
             name,
             f"{med:.4g}",
             f"+{hi1:.4g}  -{lo1:.4g}",
-            f"[{lo3:.4g}, {hi3:.4g}]",
+            f"+{hi3:.4g}  -{lo3:.4g}",
         ), c))
 
     if "eep" in param_names:
@@ -188,23 +201,26 @@ def display_elapsed(t_start):
     print()
 
 
+_EEP_PHASE_LABELS = {
+    "PreMS": "Pre-Main Sequence",
+    "ZAMS": "Main Sequence (early)",
+    "IAMS": "Main Sequence (late/turnoff)",
+    "TAMS": "Subgiant/RGB",
+    "RGBTip": "RGB Tip",
+    "ZACHeB": "Core He Burning",
+    "TAHeB": "Early AGB",
+    "TPAGB": "TP-AGB / post-AGB",
+}
+
+
 def _eep_to_state(eep: float) -> str:
-    if eep < 202:
-        return "Pre-Main Sequence"
-    elif eep < 353:
-        return "Main Sequence (early)"
-    elif eep < 454:
-        return "Main Sequence (late/turnoff)"
-    elif eep < 605:
-        return "Subgiant/RGB"
-    elif eep < 631:
-        return "RGB Tip"
-    elif eep < 707:
-        return "Core He Burning"
-    elif eep < 808:
-        return "Early AGB"
-    else:
-        return "TP-AGB / post-AGB"
+    """Map an EEP value to its phase using config.EEP_PHASES boundaries."""
+    last = "Pre-Main Sequence"
+    for phase, threshold in EEP_PHASES.items():
+        if eep < threshold:
+            return last
+        last = _EEP_PHASE_LABELS.get(phase, last)
+    return last
 
 
 def _safe_pow10(arr):
