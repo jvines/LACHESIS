@@ -12,6 +12,7 @@ __all__ = ["Librarian"]
 import logging
 import warnings
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -20,19 +21,31 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from astroquery.gaia import Gaia
 from astroquery.mast import Catalogs
-from astroquery.vizier import Vizier
+from astroquery.vizier import Vizier as _VizierClass
 from astroquery.xmatch import XMatch
 from regions import CircleSkyRegion
 
 logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore", category=UserWarning, append=True)
-Vizier.ROW_LIMIT = -1
-Vizier.columns = ["all"]
-Vizier.TIMEOUT = 60
+
+# Local Vizier instance — never mutate the module-level singleton, which is
+# shared across the whole Python process and breaks any other consumer of
+# astroquery in the same interpreter.
+Vizier = _VizierClass(row_limit=-1, columns=["all"], timeout=60)
 Gaia.TIMEOUT = 60
 XMatch.TIMEOUT = 60
 Catalogs.TIMEOUT = 60
+
+# Shared executor used by _with_timeout — avoids per-call pool spawn/teardown.
+_TIMEOUT_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="librarian")
+
+# Module-level dustmap caches. Constructing SFDQuery loads ~600 MB of FITS;
+# repeating per-Star creation makes catalogue-scale runs unusable.
+_DUSTMAP_CACHE: dict = {}
+
+# Schlafly+11 SFD V-band coefficient: A_V = 2.742 * E(B-V).
+_AV_PER_EBV_SFD = 2.742
 
 
 # ── Data structures ──────────────────────────────────────────────
@@ -65,18 +78,17 @@ _QUERY_TIMEOUT = 60  # seconds per network query
 
 def _with_timeout(func, *args, timeout=_QUERY_TIMEOUT, **kwargs):
     """Run any callable with a hard timeout. Returns None on timeout or error."""
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    from concurrent.futures import TimeoutError as FuturesTimeout
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(func, *args, **kwargs)
-        try:
-            return future.result(timeout=timeout)
-        except FuturesTimeout:
-            logger.warning("Query timed out after %ds", timeout)
-            return None
-        except Exception as e:
-            logger.warning("Query failed: %s", e)
-            return None
+    future = _TIMEOUT_POOL.submit(func, *args, **kwargs)
+    try:
+        return future.result(timeout=timeout)
+    except FuturesTimeout:
+        logger.warning("Query timed out after %ds", timeout)
+        return None
+    except Exception as e:
+        logger.warning("Query failed: %s", e)
+        return None
 
 
 def _tap_query(service, query, timeout=_QUERY_TIMEOUT):
@@ -430,29 +442,21 @@ class Librarian:
         if self._gaia_id is None:
             return
 
-        try:
-            main_cats = Vizier.query_constraints(
-                catalog="I/355/gaiadr3", Source=str(self._gaia_id)
-            )
-        except Exception as e:
-            logger.warning("Gaia DR3 query failed: %s", e)
-            return
-
+        main_cats = _with_timeout(
+            Vizier.query_constraints,
+            catalog="I/355/gaiadr3", Source=str(self._gaia_id),
+        )
         if not main_cats or len(main_cats[0]) == 0:
             logger.warning("Gaia DR3 source %d not found", self._gaia_id)
             return
         main = main_cats[0][0]
 
         # FLAME astrophysical parameters table
-        ap = None
-        try:
-            ap_cats = Vizier.query_constraints(
-                catalog="I/355/paramp", Source=str(self._gaia_id)
-            )
-            if ap_cats and len(ap_cats[0]) > 0:
-                ap = ap_cats[0][0]
-        except Exception:
-            pass
+        ap_cats = _with_timeout(
+            Vizier.query_constraints,
+            catalog="I/355/paramp", Source=str(self._gaia_id),
+        )
+        ap = ap_cats[0][0] if ap_cats and len(ap_cats[0]) > 0 else None
 
         # Parallax (Lindegren+21 correction)
         plx = _col(main, "Plx")
@@ -559,7 +563,7 @@ class Librarian:
             query = (
                 f"SELECT xmatch.original_ext_source_id "
                 f"FROM gaiadr3.{cat_def.xmatch_table}_best_neighbour AS xmatch "
-                f"WHERE xmatch.source_id = {self._gaia_id}"
+                f"WHERE xmatch.source_id = {int(self._gaia_id)}"
             )
 
             result = _tap_query(Gaia, query)
@@ -590,23 +594,20 @@ class Librarian:
             # Cone-only fallback (RAVE, SkyMapper — not on XMatch server)
             if cat_name in _CONE_ONLY_FALLBACK:
                 viz_cat, id_cols = _CONE_ONLY_FALLBACK[cat_name]
-                try:
-                    result = Vizier.query_region(
-                        self._coord, radius=self._search_radius, catalog=viz_cat
-                    )
-                    if not result or len(result[0]) == 0:
-                        self._ids[cat_name] = None
-                        continue
-                    result[0].sort("_r")
-                    row = result[0][0]
-                    found = next(
-                        (_col(row, c) for c in id_cols if c in result[0].colnames),
-                        None,
-                    )
-                    self._ids[cat_name] = found
-                except Exception as e:
-                    logger.warning("Cone fallback failed for %s: %s", cat_name, e)
+                result = _with_timeout(
+                    Vizier.query_region,
+                    self._coord, radius=self._search_radius, catalog=viz_cat,
+                )
+                if not result or len(result[0]) == 0:
                     self._ids[cat_name] = None
+                    continue
+                result[0].sort("_r")
+                row = result[0][0]
+                found = next(
+                    (_col(row, c) for c in id_cols if c in result[0].colnames),
+                    None,
+                )
+                self._ids[cat_name] = found
                 continue
 
             if cat_name not in _XMATCH_CONFIG:
@@ -614,13 +615,14 @@ class Librarian:
 
             vizier_cat, id_cols = _XMATCH_CONFIG[cat_name]
 
+            xm = _with_timeout(
+                XMatch.query,
+                cat1="vizier:I/355/gaiadr3",
+                cat2=vizier_cat,
+                max_distance=self._search_radius,
+                area=region,
+            )
             try:
-                xm = XMatch.query(
-                    cat1="vizier:I/355/gaiadr3",
-                    cat2=vizier_cat,
-                    max_distance=self._search_radius,
-                    area=region,
-                )
                 if xm is None or len(xm) == 0:
                     self._ids[cat_name] = None
                     continue
@@ -676,12 +678,13 @@ class Librarian:
         """Query Bailer-Jones EDR3 geometric distance."""
         if self._gaia_id is None:
             return
+        res = _with_timeout(
+            Vizier.query_constraints,
+            catalog="I/352/gedr3dis", Source=str(self._gaia_id),
+        )
+        if not res or len(res[0]) == 0:
+            return
         try:
-            res = Vizier.query_constraints(
-                catalog="I/352/gedr3dis", Source=str(self._gaia_id)
-            )
-            if not res or len(res[0]) == 0:
-                return
             row = res[0][0]
             dist = float(row["rgeo"])
             lo = dist - float(row["b_rgeo"])
@@ -689,7 +692,7 @@ class Librarian:
             self._distance = dist
             self._distance_e = max(lo, hi)
         except Exception as e:
-            logger.warning("Bailer-Jones query failed: %s", e)
+            logger.warning("Bailer-Jones row parse failed: %s", e)
 
     # ── Photometry retrieval ─────────────────────────────────────
 
@@ -708,14 +711,12 @@ class Librarian:
         ]
         cats = {}
         if viz_ids:
-            try:
-                result = Vizier.query_region(
-                    self._coord, radius=self._search_radius, catalog=viz_ids
-                )
-                if result:
-                    cats = result
-            except Exception as e:
-                logger.warning("Bulk VizieR query failed: %s", e)
+            result = _with_timeout(
+                Vizier.query_region,
+                self._coord, radius=self._search_radius, catalog=viz_ids,
+            )
+            if result:
+                cats = result
 
         for cat_name in _STANDARD_CATALOGS:
             if cat_name in self._ignore:
@@ -814,14 +815,10 @@ class Librarian:
 
     def _fetch_tess(self):
         """Query TESS TIC via MAST, crossmatched on Gaia ID."""
-        try:
-            result = Catalogs.query_region(
-                self._coord, radius=self._search_radius, catalog="TIC"
-            )
-        except Exception as e:
-            logger.warning("TESS TIC query failed: %s", e)
-            return
-
+        result = _with_timeout(
+            Catalogs.query_region,
+            self._coord, radius=self._search_radius, catalog="TIC",
+        )
         if result is None or len(result) == 0:
             return
 
@@ -865,7 +862,7 @@ class Librarian:
             "FROM external.apassdr9 AS apass "
             "INNER JOIN gaiadr3.apassdr9_best_neighbour AS xmatch "
             "ON apass.recno = xmatch.original_ext_source_id "
-            f"WHERE xmatch.source_id = {self._gaia_id}"
+            f"WHERE xmatch.source_id = {int(self._gaia_id)}"
         )
 
         result = _tap_query(Gaia, query)
@@ -895,7 +892,7 @@ class Librarian:
             "SELECT object_id, u_psf, e_u_psf, v_psf, e_v_psf, "
             "g_psf, e_g_psf, r_psf, e_r_psf, i_psf, e_i_psf, "
             "z_psf, e_z_psf, flags "
-            f"FROM dr2.master WHERE object_id = {sm_id}"
+            f"FROM dr2.master WHERE object_id = {int(sm_id)}"
         )
         result = _tap_query(tap, query)
         if result is None or len(result) == 0:
@@ -917,13 +914,14 @@ class Librarian:
     def _fetch_galex(self):
         """Query GALEX via VizieR XMatch with Gaia DR3."""
         region = CircleSkyRegion(self._coord, radius=self._search_radius)
+        xm = _with_timeout(
+            XMatch.query,
+            cat1="vizier:I/355/gaiadr3",
+            cat2="vizier:II/312/ais",
+            max_distance=self._search_radius,
+            area=region,
+        )
         try:
-            xm = XMatch.query(
-                cat1="vizier:I/355/gaiadr3",
-                cat2="vizier:II/312/ais",
-                max_distance=self._search_radius,
-                area=region,
-            )
             if xm is None or len(xm) == 0:
                 return
 
@@ -952,13 +950,14 @@ class Librarian:
         Color algebra: V direct, B = (B-V) + V, U = (U-B) + B.
         """
         region = CircleSkyRegion(self._coord, radius=5 * u.arcmin)
+        xm = _with_timeout(
+            XMatch.query,
+            cat1="vizier:I/355/gaiadr3",
+            cat2="vizier:II/168/ubvmeans",
+            max_distance=3 * u.arcmin,
+            area=region,
+        )
         try:
-            xm = XMatch.query(
-                cat1="vizier:I/355/gaiadr3",
-                cat2="vizier:II/168/ubvmeans",
-                max_distance=3 * u.arcmin,
-                area=region,
-            )
             if xm is None or len(xm) == 0:
                 return
 
@@ -1013,13 +1012,14 @@ class Librarian:
         region = CircleSkyRegion(self._coord, radius=self._search_radius)
 
         for cat2, max_dist in xm_configs:
+            xm = _with_timeout(
+                XMatch.query,
+                cat1="vizier:I/355/gaiadr3",
+                cat2=cat2,
+                max_distance=max_dist,
+                area=region,
+            )
             try:
-                xm = XMatch.query(
-                    cat1="vizier:I/355/gaiadr3",
-                    cat2=cat2,
-                    max_distance=max_dist,
-                    area=region,
-                )
                 if xm is None or len(xm) == 0:
                     continue
 
@@ -1107,8 +1107,9 @@ class Librarian:
             return None
 
         try:
-            cat = Vizier.query_constraints(
-                catalog="III/286/allstars", **{"2MASS": str(tmass_id)}
+            cat = _with_timeout(
+                Vizier.query_constraints,
+                catalog="III/286/allstars", **{"2MASS": str(tmass_id)},
             )
             if not cat or len(cat[0]) == 0:
                 return None
@@ -1127,7 +1128,7 @@ class Librarian:
             mh = _col(row, "__M_H_")
             mh_e = _col(row, "e__M_H_")
 
-            if any(v is None for v in (teff, logg, mh)):
+            if any(v is None or not np.isfinite(float(v)) for v in (teff, logg, mh)):
                 return None
 
             return {
@@ -1151,7 +1152,8 @@ class Librarian:
             return None
 
         try:
-            cat = Vizier.query_constraints(
+            cat = _with_timeout(
+                Vizier.query_constraints,
                 catalog="J/MNRAS/506/150/catalog",
                 Source=str(self._gaia_id),
             )
@@ -1175,7 +1177,7 @@ class Librarian:
             feh = _col(row, "fe_h")
             feh_e = _col(row, "e_fe_h")
 
-            if any(v is None for v in (teff, logg, feh)):
+            if any(v is None or not np.isfinite(float(v)) for v in (teff, logg, feh)):
                 return None
 
             return {
@@ -1197,8 +1199,9 @@ class Librarian:
             return None
 
         try:
-            cat = Vizier.query_constraints(
-                catalog="III/283/madera", ObsID=str(rave_id)
+            cat = _with_timeout(
+                Vizier.query_constraints,
+                catalog="III/283/madera", ObsID=str(rave_id),
             )
             if not cat or len(cat[0]) == 0:
                 return None
@@ -1221,15 +1224,18 @@ class Librarian:
             return None
 
     def _query_lamost(self) -> dict | None:
-        """Query LAMOST DR11 stellar parameters via VizieR (V/164).
+        """Query LAMOST DR9 stellar parameters via VizieR (V/162).
 
         Crossmatches via positional cone search since LAMOST has no
         pre-matched Gaia source_id. Requires SNR_g > 30.
         """
         try:
-            cats = Vizier.query_region(
-                self._coord, radius=self._search_radius, catalog="V/162"
+            cats = _with_timeout(
+                Vizier.query_region,
+                self._coord, radius=self._search_radius, catalog="V/162",
             )
+            if cats is None:
+                return None
             if not cats or len(cats[0]) == 0:
                 return None
 
@@ -1270,8 +1276,9 @@ class Librarian:
         Uses conservative default errors since many entries lack formal errors.
         """
         try:
-            cats = Vizier.query_region(
-                self._coord, radius=self._search_radius, catalog="B/pastel/pastel"
+            cats = _with_timeout(
+                Vizier.query_region,
+                self._coord, radius=self._search_radius, catalog="B/pastel/pastel",
             )
             if not cats or len(cats[0]) == 0:
                 return None
@@ -1283,7 +1290,7 @@ class Librarian:
             logg = _col(row, "logg")
             feh = _col(row, "__Fe_H_")
 
-            if any(v is None for v in (teff, logg, feh)):
+            if any(v is None or not np.isfinite(float(v)) for v in (teff, logg, feh)):
                 return None
 
             teff_e = _col(row, "e_Teff")
@@ -1303,18 +1310,23 @@ class Librarian:
             return None
 
     def _query_extinction(self):
-        """Query max line-of-sight Av from SFD dustmap."""
-        try:
-            from dustmaps.sfd import SFDQuery
-            from astropy.coordinates import SkyCoord
-            import astropy.units as u
+        """Query max line-of-sight Av from SFD dustmap.
 
-            d = self._distance if self._distance is not None else 1000.0
-            coords = SkyCoord(self.ra, self.dec, distance=d,
-                              unit=(u.deg, u.deg, u.pc), frame='icrs')
-            ebv = SFDQuery()(coords)
-            self.Av = float(ebv) * 2.742
-        except Exception:
+        SFD is purely 2D (line-of-sight integrated), so the distance kwarg
+        is intentionally not passed. The SFDQuery instance is cached at
+        module scope to avoid reloading ~600 MB of FITS per Star.
+        """
+        try:
+            sfd = _DUSTMAP_CACHE.get("sfd")
+            if sfd is None:
+                from dustmaps.sfd import SFDQuery
+                sfd = SFDQuery()
+                _DUSTMAP_CACHE["sfd"] = sfd
+            coords = SkyCoord(self.ra, self.dec, unit=(u.deg, u.deg), frame='icrs')
+            ebv = sfd(coords)
+            self.Av = float(ebv) * _AV_PER_EBV_SFD
+        except Exception as e:
+            logger.warning("SFD extinction query failed: %s", e)
             self.Av = None
 
     # ── Helpers ──────────────────────────────────────────────────
