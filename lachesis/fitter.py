@@ -547,11 +547,16 @@ class Fitter:
             star=self._star,
         )
         idata.to_netcdf(nc_path)
+        # Stack-level logzerr: variance of evidence-weighted log_z across grids.
+        log_z = bma_result.log_evidences
+        weights = bma_result.weights
+        mean_lz = float(np.sum(weights * log_z))
+        logzerr_bma = float(np.sqrt(max(np.sum(weights * (log_z - mean_lz) ** 2), 0.0)))
         save_summary_dat(dat_path, {
             "samples": bma_result.samples,
             "derived": bma_result.derived,
-            "logz": bma_result.log_evidences.max(),
-            "logzerr": 0.0,
+            "logz": bma_result.log_evidence,
+            "logzerr": logzerr_bma,
         })
         save_model_weights(weights_path, bma_result)
 

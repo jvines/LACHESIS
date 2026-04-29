@@ -170,6 +170,7 @@ class IsochroneFitter:
             "logz": results.logz[-1],
             "logzerr": results.logzerr[-1],
             "derived": derived,
+            "param_names": list(param_names),
             "dynesty_results": results,
         }
 
