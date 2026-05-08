@@ -40,6 +40,14 @@ exclude = [
     "tests",
     "scripts",
     "docs",
+    "data",
+    "paper_analysis",
+    "paper_analysis_*",
+    "sources",
+    "*.log",
+    "dist",
+    "build",
+    "*.egg-info",
 ]
 
 [tool.pytest.ini_options]
