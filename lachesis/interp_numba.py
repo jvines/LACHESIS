@@ -112,12 +112,12 @@ def _trilinear(grid, ax0, ax1, ax2, x0, x1, x2, n_cols):
     return result
 
 
-@nb.njit(cache=True, parallel=True)
+@nb.njit(cache=True)  # parallel=True removed — numba TBB pool races with dynesty teardown across grids
 def _trilinear_batch(grid, ax0, ax1, ax2, x0s, x1s, x2s, n_cols):
     """Vectorised trilinear interpolation; parallel over batch rows."""
     n = len(x0s)
     result = np.empty((n, n_cols))
-    for i in prange(n):
+    for i in range(n):
         result[i] = _trilinear(grid, ax0, ax1, ax2, x0s[i], x1s[i], x2s[i], n_cols)
     return result
 
@@ -179,12 +179,12 @@ def _quadlinear(grid, ax0, ax1, ax2, ax3, x0, x1, x2, x3, n_cols):
     return result
 
 
-@nb.njit(cache=True, parallel=True)
+@nb.njit(cache=True)  # parallel=True removed — numba TBB pool races with dynesty teardown across grids
 def _quadlinear_batch(grid, ax0, ax1, ax2, ax3, x0s, x1s, x2s, x3s, n_cols):
     """Vectorised quadrilinear interpolation; parallel over batch rows."""
     n = len(x0s)
     result = np.empty((n, n_cols))
-    for i in prange(n):
+    for i in range(n):
         result[i] = _quadlinear(
             grid, ax0, ax1, ax2, ax3,
             x0s[i], x1s[i], x2s[i], x3s[i], n_cols,

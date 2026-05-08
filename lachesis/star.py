@@ -135,11 +135,15 @@ class Star:
                 self.logg_e = logg_e if logg_e is not None else sp.get("logg_err")
                 self.feh = feh if feh is not None else sp.get("feh")
                 self.feh_e = feh_e if feh_e is not None else sp.get("feh_err")
+                self.spectroscopic_source = sp.get("source")
+                self.spectroscopic_params = dict(sp)
             else:
                 self.logg = logg
                 self.logg_e = logg_e
                 self.feh = feh
                 self.feh_e = feh_e
+                self.spectroscopic_source = None
+                self.spectroscopic_params = None
         else:
             # User provided magnitudes (or offline=True): skip Librarian
             if verbose:
@@ -160,6 +164,10 @@ class Star:
             self.luminosity_e = None
             self.radius = None
             self.radius_e = None
+            self.spectroscopic_source = (
+                "user_supplied" if (logg is not None or feh is not None) else None
+            )
+            self.spectroscopic_params = None
 
         # Derive distance from parallax if not given
         if self.distance is None and self.parallax is not None and self.parallax > 0:

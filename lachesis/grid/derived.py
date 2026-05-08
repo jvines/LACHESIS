@@ -34,5 +34,56 @@ def compute_density(star_mass: np.ndarray, radius: np.ndarray) -> np.ndarray:
 def compute_dm_deep(
     initial_mass: np.ndarray, eep_axis: int = -1
 ) -> np.ndarray:
-    """Mass gradient d(initial_mass)/dEEP along the EEP axis."""
-    return np.gradient(initial_mass, axis=eep_axis)
+    """Mass gradient d(initial_mass)/dEEP along the EEP axis.
+
+    Plain ``np.gradient`` returns 0 across constant-mass plateaus that arise
+    when the (Fe/H, age, EEP) regrid samples the EEP axis more finely than
+    the native mass-track spacing — so multiple EEP cells inherit the same
+    mass. PARSEC's shipped grid has plateaus over ~37% of the MS volume,
+    which the EEP prior ``log P(eep) = log IMF(M) + log |dM/dEEP|`` then
+    rejects (``-inf`` from the zero gradient). MIST has a few such cells,
+    Dartmouth/BaSTI/YAPSI essentially none.
+
+    This implementation linearly interpolates the mass curve across plateaus
+    on each (Fe/H, age) slice and takes ``np.gradient`` of the interpolated
+    curve, which preserves the integral ``∫|dM/dEEP|dEEP`` between any two
+    non-plateau anchor points. Cells outside the finite mass support of a
+    track stay NaN (handled by the prior as out-of-grid).
+    """
+    arr = np.asarray(initial_mass)
+    moved = np.moveaxis(arr, eep_axis, -1)
+    *batch_shape, n_eep = moved.shape
+    flat = moved.reshape(-1, n_eep)
+
+    out = np.empty_like(flat, dtype=float)
+    eep_idx = np.arange(n_eep, dtype=float)
+
+    for b in range(flat.shape[0]):
+        m = flat[b]
+        finite = np.isfinite(m)
+        n_fin = int(finite.sum())
+        if n_fin < 2:
+            out[b] = np.nan
+            continue
+
+        # Linearly interpolate across consecutive-equal-mass plateaus,
+        # using only mass-change knots as anchors. The first finite cell is
+        # always treated as a knot so we don't drop the leading plateau.
+        idx = np.where(finite)[0]
+        m_fin = m[idx]
+        keep = np.empty(n_fin, dtype=bool)
+        keep[0] = True
+        keep[1:] = np.diff(m_fin) > 0  # mass strictly increased
+        # Also keep the trailing point so a plateau at the end isn't extrapolated
+        keep[-1] = True
+
+        knot_idx = idx[keep].astype(float)
+        knot_mass = m_fin[keep]
+
+        smoothed = np.full(n_eep, np.nan)
+        # np.interp clips outside [knot_idx[0], knot_idx[-1]]; that's fine
+        # because we only fill at finite cells, all of which lie inside.
+        smoothed[idx] = np.interp(eep_idx[idx], knot_idx, knot_mass)
+        out[b] = np.gradient(smoothed)
+
+    return np.moveaxis(out.reshape(*batch_shape, n_eep), -1, eep_axis)
