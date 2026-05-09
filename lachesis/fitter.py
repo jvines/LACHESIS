@@ -552,12 +552,16 @@ class Fitter:
         weights = bma_result.weights
         mean_lz = float(np.sum(weights * log_z))
         logzerr_bma = float(np.sqrt(max(np.sum(weights * (log_z - mean_lz) ** 2), 0.0)))
+        # param_names from the first grid's prior — same across all BMA grids
+        # by construction. Pass them through so save_summary_dat can write
+        # the sampled-parameter rows (log_age, feh, distance, Av, eep, ...).
+        param_names = self._fitters[self._grids[0]].prior.param_names
         save_summary_dat(dat_path, {
             "samples": bma_result.samples,
             "derived": bma_result.derived,
             "logz": bma_result.log_evidence,
             "logzerr": logzerr_bma,
-        })
+        }, param_names=param_names)
         save_model_weights(weights_path, bma_result)
 
     @staticmethod

@@ -78,3 +78,62 @@ class TestArvizOutput:
         # log_evidence is stored on the InferenceData attrs (and per-grid
         # in constant_data for BMA), not on a sample_stats group.
         assert "log_evidence" in idata.attrs
+
+
+class TestSaveSummaryDat:
+    """The v0.0.5 _BMA.dat files were missing Age, [Fe/H], Distance, Av,
+    EEP rows because Fitter._save_bma called save_summary_dat without
+    param_names; output.py's param-list block is gated on `if param_names:`
+    and silently skipped them. These tests guard both paths.
+    """
+
+    def test_writes_sampled_param_rows_when_given_param_names(self, fit_result, tmp_path):
+        from lachesis.output import save_summary_dat
+        out = tmp_path / "summary.dat"
+        param_names = fit_result["param_names"]
+        save_summary_dat(str(out), fit_result, param_names=param_names)
+
+        text = out.read_text()
+        # Derived rows always present
+        assert "Mass(Msun)" in text
+        assert "Teff(K)" in text
+        assert "Radius(Rsun)" in text
+        # Sampled-param rows that the v0.0.5 .dat lost
+        assert "Age(Gyr)" in text, "Age row dropped — log_age->Age conversion broken"
+        assert "[Fe/H]" in text, "[Fe/H] row missing"
+        # Distance / Av only present if those params were sampled in the
+        # particular fit. The basic fit_result fixture only fits eep,
+        # log_age, feh, so just confirm EEP shows up.
+        assert "EEP" in text, "EEP row missing"
+
+    def test_no_param_rows_when_param_names_unavailable(self, fit_result, tmp_path):
+        # Prior to the v0.0.5 fix, fitter.py constructed a result dict for
+        # save_summary_dat that lacked the param_names key, AND passed no
+        # param_names kwarg, so output.py's `param_names = result.get(...)`
+        # fallback resolved to None and silently dropped the sampled rows.
+        # Reproduce that exact failure shape.
+        from lachesis.output import save_summary_dat
+        result_no_pn = {k: v for k, v in fit_result.items() if k != "param_names"}
+        out = tmp_path / "summary_no_pn.dat"
+        save_summary_dat(str(out), result_no_pn, param_names=None)
+        text = out.read_text()
+        assert "Mass(Msun)" in text  # derived rows still written
+        assert "[Fe/H]" not in text  # sampled rows skipped — this is the
+                                     # v0.0.5 _BMA.dat bug we're guarding
+        assert "EEP" not in text
+
+
+class TestFitterSaveBMAPassesParamNames:
+    """End-to-end: Fitter._save_bma must pass param_names to save_summary_dat
+    so the human-readable .dat retains all rows the .nc has. Source-inspection
+    test rather than a full BMA run because that costs ~30 s.
+    """
+
+    def test_save_bma_threads_param_names(self):
+        import inspect
+        from lachesis.fitter import Fitter
+        src = inspect.getsource(Fitter._save_bma)
+        assert "param_names=" in src, (
+            "Fitter._save_bma must explicitly pass param_names= to "
+            "save_summary_dat or the .dat loses sampled-parameter rows"
+        )

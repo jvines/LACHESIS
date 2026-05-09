@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import LineCollection
 from matplotlib.gridspec import GridSpec
+from scipy.stats import gaussian_kde
 
 from lachesis.bma import BMAResult
 

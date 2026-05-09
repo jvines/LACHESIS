@@ -69,3 +69,30 @@ class TestDerivedQuantities:
         dm = compute_dm_deep(masses)
         # Gradient of linear should be approximately constant
         assert np.allclose(dm, dm[0], rtol=0.05)
+
+    def test_dm_deep_recovers_across_plateau(self):
+        """compute_dm_deep should linearly interpolate across constant-mass
+        plateaus that arise as regrid artifacts, so the EEP prior doesn't
+        reject those cells. PARSEC's shipped HDF5 has ~37% of MS cells in
+        such plateaus (v0.0.5 fix); pre-fix np.gradient returned 0 there
+        and IMF*|dM/dEEP| -> -inf in the EEP prior.
+        """
+        # 1.0 / 1.0 / 1.0 / 1.5 / 2.0: positions 0-2 are a real plateau,
+        # the linear-interp fix should give all positions a positive gradient
+        masses = np.array([1.0, 1.0, 1.0, 1.5, 2.0])
+        dm = compute_dm_deep(masses)
+        assert np.all(dm > 0), (
+            f"plateau cells got non-positive dm_deep: {dm} "
+            "(would cause EEP prior to reject them)"
+        )
+
+    def test_dm_deep_preserves_total_mass_change_across_plateau(self):
+        """For a plateau-padded mass curve, the integral ∫|dM/dEEP|dEEP
+        over the EEP range should still recover the end-to-end mass
+        change. Mathematically consistent linear-interp across plateaus,
+        not an arbitrary epsilon floor.
+        """
+        masses = np.array([0.5, 0.5, 0.5, 1.0, 1.0, 2.0, 2.0])
+        dm = compute_dm_deep(masses)
+        integral = np.trapezoid(dm, np.arange(len(masses)))
+        assert np.isclose(integral, masses[-1] - masses[0], atol=0.5)

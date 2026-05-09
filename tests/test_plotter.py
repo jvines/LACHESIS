@@ -240,6 +240,30 @@ class TestBMAOnly:
         assert labels is not None
         assert set(labels.tolist()) == {"MIST", "PARSEC"}
 
+    def test_histograms_bma_path(self, bma_plotter):
+        """BMA plot_histograms calls gaussian_kde — guards against the
+        v0.0.5 regression where the import was missing entirely from
+        plotter/_api.py and the BMA-only branches raised NameError.
+        The single-grid path doesn't exercise these lines, so this
+        test must use a multi-grid plotter."""
+        bma_plotter.plot_histograms()
+        plt.close("all")
+
+
+# ── Module-import smoke (cheap, runs even without grid h5 files) ───
+# The v0.0.5 plotter shipped with `gaussian_kde(...)` calls but no
+# `from scipy.stats import gaussian_kde` anywhere in the file. The
+# bug only fired when plot_histograms hit the BMA branches; static
+# import-bind checks like this would have caught it at PR review.
+
+class TestPlotterImportBindings:
+    def test_gaussian_kde_bound_in_api(self):
+        import lachesis.plotter._api as api
+        assert hasattr(api, "gaussian_kde"), (
+            "gaussian_kde must be importable from lachesis.plotter._api "
+            "(used in plot_histograms BMA paths)"
+        )
+
 
 # ── Figure-leak guard ───────────────────────────────────────────────
 
