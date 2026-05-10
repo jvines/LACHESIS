@@ -46,6 +46,74 @@ class TestNumbaInterpolator:
                 assert r_numba[col] == pytest.approx(r_scipy[col], rel=1e-10), \
                     f"Mismatch on {col}"
 
+    def test_radius_recomputed_from_log_R_post_interp(self):
+        """Radius must be recomputed from log_R after interpolation, not
+        interpolated linearly. Otherwise cubes that span orders of magnitude
+        in radius (e.g. PARSEC's regridded EEP layout, where the same EEP
+        integer maps to MS for one isochrone and RGB tip for another) inject
+        a bimodal/inflated radius posterior. Smoking-gun case: KIC_7871531
+        v0.0.6 returned R=8 R☉ for a 0.76 M☉ logg=4.3 main-sequence dwarf.
+        """
+        from types import SimpleNamespace
+        from lachesis.interp_numba import NumbaGridInterpolator
+
+        # Pathological synthetic grid: at fixed EEP, radius spans 0.1–130 R☉
+        # across (feh, age) corners while log_R stays well-behaved.
+        feh_values = np.array([-0.25, 0.0])
+        age_values = np.array([9.50, 9.55])
+        eep_values = np.array([322.0, 323.0])
+        columns = ["initial_mass", "log_Teff", "log_g", "log_L", "log_R",
+                   "Teff", "Mbol", "radius", "density"]
+        # Cube: 8 corners (feh, age, eep). At each corner pick log_R values
+        # that differ by ~3 dex between adjacent (feh, age) slices —
+        # mimicking PARSEC's regrid pathology.
+        log_R = np.array([
+            [[2.10, 2.13],   # feh=-.25, age=9.50  → R=125, 135
+             [-0.93, -0.93]], # feh=-.25, age=9.55  → R=0.12
+            [[-0.020, -0.018], # feh=0.0,  age=9.50 → R=0.96
+             [-0.049, -0.047]] # feh=0.0,  age=9.55 → R=0.89
+        ])
+        mass = np.full(log_R.shape, 0.93)
+        log_g = np.full(log_R.shape, 4.30)
+        log_T = np.full(log_R.shape, 3.72)
+        log_L = np.full(log_R.shape, -0.13)
+        Teff = 10**log_T
+        Mbol = -2.5 * log_L + 4.74
+        # Bake the *bug-prone* radius / density columns: radius == 10**log_R,
+        # consistent with the constructor, but interpolating these linearly
+        # would inflate the result for queries near (feh=0, age=9.5).
+        radius = 10**log_R
+        density = mass / radius**3 * 1.41  # rough scale
+        data = np.stack([mass, log_T, log_g, log_L, log_R,
+                         Teff, Mbol, radius, density], axis=-1)
+
+        grid = SimpleNamespace(
+            columns=columns, feh_values=feh_values, age_values=age_values,
+            eep_values=eep_values, _data=data, vini_values=None,
+        )
+        interp = NumbaGridInterpolator(grid)
+
+        # Query far from the inflated corners: feh=-0.033, mostly weighted
+        # toward feh=0 where log_R ≈ 0 → radius ≈ 1 R☉.
+        out = interp(eep=322.9, log_age=9.528, feh=-0.033)
+        log_R_interp = out["log_R"]
+        radius_interp = out["radius"]
+
+        # The fix: radius == 10**log_R after interpolation, not the linear
+        # cube interp (which would give ~8 R☉ here).
+        assert radius_interp == pytest.approx(10**log_R_interp, rel=1e-6), (
+            f"Radius decoupled from log_R after interp: "
+            f"radius={radius_interp:.3f}, 10**log_R={10**log_R_interp:.3f}. "
+            f"This is the v0.0.6 PARSEC-cube bug — radius column is being "
+            f"interpolated linearly through cells with R spanning orders of "
+            f"magnitude. Recompute from log_R post-interp."
+        )
+        # Sanity: should be O(1) R☉, not O(8) R☉.
+        assert radius_interp < 2.0, (
+            f"Radius={radius_interp:.2f} suggests linear-radius "
+            f"interpolation through the inflated corners is still active."
+        )
+
     def test_matches_scipy_between_points(self, grids):
         """Interpolated values between grid points should match."""
         mg, scipy_interp, numba_interp = grids

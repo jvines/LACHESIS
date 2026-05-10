@@ -5,6 +5,48 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
 
+def _recompute_linear_from_logs(result):
+    """Replace linearly-interpolated radius/density with values recomputed
+    from the log-quantities in the same result.
+
+    Background: regridded grids (notably PARSEC) can place wildly different
+    evolutionary states at the same EEP across (feh, age) — e.g. EEP=322
+    is end-of-MS for one isochrone but RGB tip for another, so the
+    interpolation cube's `radius` corners span 0.1–130 R☉. Linear
+    interpolation across that cube produces nonsense (e.g. R=8 R☉ for a
+    main-sequence query). The log-quantities (`log_R`) interpolate cleanly
+    because they're well-behaved across the same cube.
+
+    The fix: trust `log_R` as the radius source-of-truth and recompute
+    linear `radius` (and `density`, which depends on radius) post-interp.
+    Mass, log_g, log_L, log_Teff are unaffected — they don't span orders
+    of magnitude across the cube. Mbol = -2.5*log_L + const is a linear
+    function of log_L, so it's also unaffected. Teff = 10**log_Teff
+    *could* show the same pathology in principle, but log_Teff varies by
+    less than ±0.3 dex across cube corners in practice, so the linear vs
+    log discrepancy is below the BC-table grid resolution and we leave
+    `Teff` interpolated as-is for likelihood compatibility.
+    """
+    if "log_R" not in result or "radius" not in result:
+        return result
+    logR = result["log_R"]
+    is_scalar = np.isscalar(logR) or (hasattr(logR, "ndim") and logR.ndim == 0)
+    radius = 10.0 ** float(logR) if is_scalar else 10.0 ** np.asarray(logR)
+    result["radius"] = radius
+    if "initial_mass" in result and "density" in result:
+        from lachesis.grid.derived import compute_density
+        mass = result["initial_mass"]
+        if is_scalar:
+            result["density"] = float(
+                compute_density(np.asarray(mass), np.asarray(radius))
+            )
+        else:
+            result["density"] = compute_density(
+                np.asarray(mass), np.asarray(radius)
+            )
+    return result
+
+
 def make_interpolator(grid):
     """Factory: returns NumbaGridInterpolator if numba is available, else scipy."""
     try:
@@ -81,4 +123,4 @@ class GridInterpolator:
             vals = interp(points)
             result[col] = float(vals[0]) if scalar else vals
 
-        return result
+        return _recompute_linear_from_logs(result)

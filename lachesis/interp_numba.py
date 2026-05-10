@@ -268,6 +268,8 @@ class NumbaGridInterpolator:
 
         scalar = eep.ndim == 0
 
+        from lachesis.interp import _recompute_linear_from_logs
+
         if self._has_vini:
             if vini is None:
                 raise ValueError("Grid has rotation axis — vini is required")
@@ -278,23 +280,25 @@ class NumbaGridInterpolator:
                     feh.item(), vini.item(), log_age.item(), eep.item(),
                     self._n_cols,
                 )
-                return {col: float(vals[i]) for i, col in enumerate(self._columns)}
+                result = {col: float(vals[i]) for i, col in enumerate(self._columns)}
             else:
                 vals = _quadlinear_batch(
                     self._data, self._feh, self._vini, self._ages, self._eeps,
                     feh, vini, log_age, eep, self._n_cols,
                 )
-                return {col: vals[:, i] for i, col in enumerate(self._columns)}
+                result = {col: vals[:, i] for i, col in enumerate(self._columns)}
         else:
             if scalar:
                 vals = _trilinear(
                     self._data, self._feh, self._ages, self._eeps,
                     feh.item(), log_age.item(), eep.item(), self._n_cols,
                 )
-                return {col: float(vals[i]) for i, col in enumerate(self._columns)}
+                result = {col: float(vals[i]) for i, col in enumerate(self._columns)}
             else:
                 vals = _trilinear_batch(
                     self._data, self._feh, self._ages, self._eeps,
                     feh, log_age, eep, self._n_cols,
                 )
-                return {col: vals[:, i] for i, col in enumerate(self._columns)}
+                result = {col: vals[:, i] for i, col in enumerate(self._columns)}
+
+        return _recompute_linear_from_logs(result)

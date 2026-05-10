@@ -1,6 +1,6 @@
 """LACHESIS — Isochrone fitting with Bayesian Model Averaging."""
 
-__version__ = "0.0.6"
+__version__ = "0.0.7"
 
 from lachesis.star import Star
 from lachesis.fitter import Fitter
