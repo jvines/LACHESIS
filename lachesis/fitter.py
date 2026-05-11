@@ -356,6 +356,52 @@ class Fitter:
             if self._verbose and external_kdes:
                 print(f"\t\t\t External priors (KDE): {', '.join(external_kdes)}")
 
+        # Drop grids whose [Fe/H] coverage doesn't overlap the star's prior.
+        # Without this, dynesty wastes 1000 init attempts before raising
+        # "could not find a single point that have a valid log-likelihood"
+        # — e.g. YAPSI ([-0.75, +0.55]) asked to fit a halo star with
+        # feh_prior = N(-1.47, 0.07). The clamp on grid_feh_lo/hi below
+        # narrows the prior interval but cannot rescue a Gaussian prior
+        # whose ±3σ window is entirely outside the grid axis.
+        if feh_prior is not None and feh_prior[0] == "gaussian":
+            mu, sig = float(feh_prior[1]), float(feh_prior[2])
+            prior_lo, prior_hi = mu - 3.0 * sig, mu + 3.0 * sig
+            dropped = []
+            kept = []
+            for name in self._grids:
+                grid = self._grid_objects[name]
+                g_lo = float(grid.feh_values[0])
+                g_hi = float(grid.feh_values[-1])
+                # Overlap of [g_lo, g_hi] with [prior_lo, prior_hi]
+                overlap_lo = max(g_lo, prior_lo)
+                overlap_hi = min(g_hi, prior_hi)
+                if overlap_hi <= overlap_lo:
+                    dropped.append((name, g_lo, g_hi))
+                else:
+                    kept.append(name)
+            if dropped and self._verbose:
+                import warnings
+                warnings.warn(
+                    f"Auto-dropped {len(dropped)} grid(s) from BMA whose "
+                    f"[Fe/H] axis doesn't overlap the star's [Fe/H] prior "
+                    f"N({mu:.2f}, {sig:.2f}) within ±3σ: "
+                    + ", ".join(f"{n} ([{lo:.2f}, {hi:.2f}])"
+                                for n, lo, hi in dropped)
+                )
+            if not kept:
+                raise InputError(
+                    f"All grids have [Fe/H] coverage incompatible with the "
+                    f"star's [Fe/H] prior N({mu:.2f}, {sig:.2f}). Verify the "
+                    f"prior is plausible for the star."
+                )
+            if self._bma and len(kept) < 2:
+                # BMA needs ≥2 grids; if only one survives the feh filter,
+                # downgrade to single-grid fit silently.
+                self._bma = False
+            self._grids = kept
+            self._grid_objects = {k: v for k, v in self._grid_objects.items() if k in kept}
+            self._interpolators = {k: v for k, v in self._interpolators.items() if k in kept}
+
         # Build IsochroneFitter per grid
         for name in self._grids:
             grid = self._grid_objects[name]

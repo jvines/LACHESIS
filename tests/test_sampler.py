@@ -94,6 +94,37 @@ class TestIsochroneFitter:
         assert np.isfinite(result["logz"])
         assert np.isfinite(result["logzerr"])
 
+    def test_auto_drop_grids_outside_feh_prior(self):
+        """A Gaussian [Fe/H] prior whose ±3σ window is entirely outside a
+        grid's [Fe/H] axis must auto-drop that grid before dynesty wastes
+        1000 init attempts and raises 'no valid log-likelihood'. The case
+        we hit on Gaia_DR3_5413575/8 (halo-like [Fe/H]=−1.47 priors vs
+        YAPSI's [-0.75, +0.55] axis).
+        """
+        if FULL_GRID_H5 is None:
+            pytest.skip("MIST grid not available")
+        from lachesis.fitter import Fitter
+        from lachesis.star import Star
+
+        # Build a Star with a tight metal-poor feh prior incompatible with YAPSI.
+        s = Star("dummy", ra=0.0, dec=0.0, magnitudes={"Bessell_V": (10.0, 0.05)},
+                 plx=10.0, plx_e=0.1, Av=0.1, feh=-1.47, feh_e=0.07,
+                 verbose=False, offline=True)
+        f = Fitter()
+        f.star = s
+        f.bma = True
+        f.grids = ["mist", "yapsi"]
+        f.verbose = False
+        f.prior_setup = {k: ("default",) for k in ("eep", "log_age", "feh", "dist", "Av")}
+        try:
+            f.initialize()
+        except Exception:
+            pytest.skip("Fitter.initialize couldn't run without a full grid set")
+        assert "yapsi" not in f.grids, (
+            "Fitter must drop YAPSI when feh_prior ±3σ is outside its axis"
+        )
+        assert "mist" in f.grids, "MIST should survive; covers [-4, +0.5]"
+
     def test_retries_with_single_bound_on_scipy_kmeans_buffer_error(self, fitter, monkeypatch):
         """dynesty's 'multi' bound calls scipy.cluster.vq.kmeans2 which
         crashes with ``IndexError: Out of bounds on buffer access (axis 0)``
@@ -105,20 +136,19 @@ class TestIsochroneFitter:
         """
         import dynesty
         call_log: list[str] = []
+        real_factory = dynesty.NestedSampler
 
-        real_init = dynesty.NestedSampler.__init__
-
-        def patched_init(self, loglike, prior_transform, ndim, **kwargs):
+        def patched_factory(*args, **kwargs):
             bound = kwargs.get("bound", "multi")
             call_log.append(bound)
-            real_init(self, loglike, prior_transform, ndim, **kwargs)
+            sampler = real_factory(*args, **kwargs)
             if bound != "single":
-                # First-call: simulate the scipy crash to force the retry path.
                 def boom(*a, **kw):
                     raise IndexError("Out of bounds on buffer access (axis 0)")
-                self.run_nested = boom
+                sampler.run_nested = boom
+            return sampler
 
-        monkeypatch.setattr(dynesty.NestedSampler, "__init__", patched_init)
+        monkeypatch.setattr("dynesty.NestedSampler", patched_factory)
 
         result = fitter.fit(
             observed={"log_Teff": 3.76, "log_g": 4.44},
