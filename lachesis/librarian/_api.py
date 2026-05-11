@@ -376,19 +376,14 @@ class Librarian:
             if plx_e is not None:
                 self._parallax_e = np.sqrt(float(plx_e) ** 2 + _PLX_SYS_ERR**2)
 
-        # GSP-Phot Teff
-        teff = _col(main, "Teff")
-        if teff is not None:
-            self._teff = float(teff)
-            b_teff = _col(main, "b_Teff")
-            B_teff = _col(main, "B_Teff")
-            if b_teff is not None and B_teff is not None:
-                self._teff_e = max(
-                    abs(self._teff - float(b_teff)),
-                    abs(float(B_teff) - self._teff),
-                )
-            else:
-                self._teff_e = 100.0
+        # Gaia GSP-Phot Teff is intentionally NOT extracted as a likelihood
+        # prior. The photometric SED already constrains Teff via BC tables;
+        # injecting GSP-Phot as a separate observable double-counts the
+        # information and pins to the sampler-percentile width (formal σ
+        # ≈ 1–5 K) which is ~100x narrower than the actual systematic vs
+        # spectroscopy (Andrae+23 quotes ±100–200 K). Spectroscopic priors
+        # used by LACHESIS are [Fe/H] (and optionally logg) — Teff is
+        # output, not input.
 
         # FLAME radius — 5x error inflation (ARIADNE convention to avoid
         # over-constraining from crude FLAME estimates)

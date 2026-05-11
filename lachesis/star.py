@@ -114,14 +114,12 @@ class Star:
             self.parallax_e = plx_e if plx_e is not None else lib._parallax_e
             self.distance = dist if dist is not None else lib._distance
             self.distance_e = dist_e if dist_e is not None else lib._distance_e
-            self.teff = lib._teff
-            self.teff_e = lib._teff_e
-            if (
-                self.teff is not None
-                and self.teff_e is not None
-                and self.teff_e < _GAIA_TEFF_ERR_FLOOR
-            ):
-                self.teff_e = _GAIA_TEFF_ERR_FLOOR
+            # Teff is never auto-injected as a likelihood prior. The
+            # photometric SED constrains Teff through the BC tables; an
+            # external Teff observable would double-count and overconstrain
+            # (see librarian/_api.py for the GSP-Phot extraction note).
+            self.teff = None
+            self.teff_e = None
             self.Av = Av if Av is not None else lib.Av
             self.luminosity = None
             self.luminosity_e = None

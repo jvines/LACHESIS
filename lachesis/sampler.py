@@ -149,14 +149,36 @@ class IsochroneFitter:
             return lnl + lnp_eep + lnp_ext
 
         dynesty_kwargs.setdefault("sample", "rwalk")
-        sampler = dynesty.NestedSampler(
-            loglike,
-            prior.prior_transform,
-            ndim=prior.ndim,
-            nlive=nlive,
-            **dynesty_kwargs,
-        )
-        sampler.run_nested(dlogz=dlogz, print_progress=verbose)
+
+        def _run(bound: str | None):
+            kw = dict(dynesty_kwargs)
+            if bound is not None:
+                kw["bound"] = bound
+            s = dynesty.NestedSampler(
+                loglike,
+                prior.prior_transform,
+                ndim=prior.ndim,
+                nlive=nlive,
+                **kw,
+            )
+            s.run_nested(dlogz=dlogz, print_progress=verbose)
+            return s
+
+        # Dynesty's 'multi' bound calls scipy.cluster.vq.kmeans2 which has a
+        # known crash on degenerate live-point distributions (empty clusters,
+        # see scipy/_vq.pyx ``_update_cluster_means`` IndexError). When the
+        # posterior tightens enough — e.g. a star with a sharp external Teff
+        # prior — the live points collapse onto a low-rank manifold and
+        # kmeans2 buffer-accesses out of bounds. Surface as an
+        # IndexError("Out of bounds on buffer access ...") from deep inside
+        # scipy.cluster._vq. Workaround: retry with bound='single', which
+        # uses a single ellipsoid and never calls kmeans2.
+        try:
+            sampler = _run(bound=None)
+        except IndexError as e:
+            if "Out of bounds on buffer access" not in str(e):
+                raise
+            sampler = _run(bound="single")
         results = sampler.results
 
         weights = np.exp(results.logwt - results.logz[-1])

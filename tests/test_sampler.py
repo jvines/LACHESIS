@@ -93,3 +93,40 @@ class TestIsochroneFitter:
         )
         assert np.isfinite(result["logz"])
         assert np.isfinite(result["logzerr"])
+
+    def test_retries_with_single_bound_on_scipy_kmeans_buffer_error(self, fitter, monkeypatch):
+        """dynesty's 'multi' bound calls scipy.cluster.vq.kmeans2 which
+        crashes with ``IndexError: Out of bounds on buffer access (axis 0)``
+        on degenerate live-point distributions. The fitter must catch this
+        specific scipy/dynesty crash and retry with bound='single'.
+
+        This was the deterministic crash on CD_Tau/YAPSI and
+        KIC_7871531-combined/BaSTI during the v0.0.7 LACHESIS-I batch.
+        """
+        import dynesty
+        call_log: list[str] = []
+
+        real_init = dynesty.NestedSampler.__init__
+
+        def patched_init(self, loglike, prior_transform, ndim, **kwargs):
+            bound = kwargs.get("bound", "multi")
+            call_log.append(bound)
+            real_init(self, loglike, prior_transform, ndim, **kwargs)
+            if bound != "single":
+                # First-call: simulate the scipy crash to force the retry path.
+                def boom(*a, **kw):
+                    raise IndexError("Out of bounds on buffer access (axis 0)")
+                self.run_nested = boom
+
+        monkeypatch.setattr(dynesty.NestedSampler, "__init__", patched_init)
+
+        result = fitter.fit(
+            observed={"log_Teff": 3.76, "log_g": 4.44},
+            uncertainties={"log_Teff": 0.01, "log_g": 0.1},
+            nlive=50, dlogz=1.0,
+        )
+        assert "single" in call_log, (
+            f"fitter must retry with bound='single' after scipy kmeans2 "
+            f"crash; observed call sequence: {call_log}"
+        )
+        assert np.isfinite(result["logz"])

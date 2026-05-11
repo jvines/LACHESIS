@@ -380,14 +380,19 @@ class TestGaiaParams:
         assert abs(plx - 10.037) < 1e-6
         assert abs(plx_e - np.sqrt(0.1**2 + 0.02**2)) < 1e-6
 
-    def test_teff_asymmetric_error(self):
+    def test_gaia_gspphot_teff_not_extracted(self):
+        """Gaia GSP-Phot Teff must NOT enter the Librarian's _teff slot.
+        The photometric SED constrains Teff via BC tables; injecting
+        GSP-Phot as a separate observable double-counts the information
+        and pins to a ~1–5 K formal σ that hides ±100–200 K systematic
+        scatter vs spectroscopy (Andrae+23).
+        """
         main = _make_gaia_main_row(teff=5800.0, b_teff=5700.0, B_teff=5950.0)
         lib = self._make_lib(main)
-        assert lib.teff is not None
-        teff, teff_e = lib.teff
-        assert teff == 5800.0
-        # max(|5800-5700|, |5950-5800|) = max(100, 150) = 150
-        assert teff_e == 150.0
+        assert lib.teff is None, (
+            "GSP-Phot Teff leaked into Librarian._teff — would inject as "
+            "a tight log_Teff likelihood prior"
+        )
 
     def test_gaia_photometry_extracted(self):
         main = _make_gaia_main_row()
@@ -633,7 +638,10 @@ class TestLibrarianIntegration:
         lib = self._make_full_lib()
         assert lib.gaia_id == 12345
         assert lib.parallax is not None
-        assert lib.teff is not None
+        # Gaia GSP-Phot Teff is intentionally NOT extracted (see
+        # test_gaia_gspphot_teff_not_extracted) — the photometric SED
+        # constrains Teff via BC tables.
+        assert lib.teff is None
         assert lib.radius is not None
         assert lib.luminosity is not None
         assert lib.mass is not None
