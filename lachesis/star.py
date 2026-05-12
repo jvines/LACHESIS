@@ -5,15 +5,24 @@ import logging
 import numpy as np
 
 from lachesis.display import display_banner
-from lachesis.error import InputError
+from lachesis.error import InputError, LachesisError
 
 logger = logging.getLogger(__name__)
+
+
+class ExtinctionError(LachesisError):
+    """Raised when the line-of-sight Av cannot be obtained from any source.
+
+    Use ``offline=True`` and pass ``Av=...`` explicitly to bypass dustmap
+    queries entirely, or install the SFD/Bayestar/Planck data files and
+    configure ``dustmaps.config['data_dir']`` before constructing a Star.
+    """
+
 
 # Av/E(B-V) coefficients (Schlafly+11 V-band).
 _AV_PER_EBV_SFD = 2.742  # for SFD/Lenz
 _AV_PER_EBV_PLANCK = 3.1
 _AV_BAYESTAR_FACTOR = 2.742 * 0.884  # Bayestar correction (Schlafly+11)
-_AV_FALLBACK = 0.1  # used when dustmap query fails
 
 # Gaia DR3 GSP_Phot Teff is bias-calibrated against APOGEE/GALAH but the
 # reported errors (b_Teff/B_Teff) are unrealistically tight for bright
@@ -196,20 +205,22 @@ class Star:
         import astropy.units as u
 
         if dustmap not in self._DUSTMAPS:
-            logger.warning("Unknown dustmap '%s'; using fallback Av=%.2f",
-                           dustmap, _AV_FALLBACK)
-            self.Av = _AV_FALLBACK
-            return
+            raise ExtinctionError(
+                f"Unknown dustmap '{dustmap}'. Valid options: "
+                f"{sorted(self._DUSTMAPS)}. Pass Av=... explicitly to bypass."
+            )
 
         mod_path, cls_name = self._DUSTMAPS[dustmap]
         try:
             mod = import_module(mod_path)
             dmap = getattr(mod, cls_name)()
         except Exception as e:
-            logger.warning("Dustmap '%s' init failed (%s); using fallback Av=%.2f",
-                           dustmap, e, _AV_FALLBACK)
-            self.Av = _AV_FALLBACK
-            return
+            raise ExtinctionError(
+                f"Dustmap '{dustmap}' could not be initialised ({type(e).__name__}: {e}). "
+                f"Either install the dust data (e.g. `python -c \"import dustmaps.sfd; "
+                f"dustmaps.sfd.fetch()\"`) and configure dustmaps.config['data_dir'], "
+                f"or pass Av=... explicitly when constructing the Star."
+            ) from e
 
         d = self.distance if self.distance is not None else 1000.0
         # SFD / Planck queries are 2D and ignore distance, but Bayestar uses
@@ -235,9 +246,11 @@ class Star:
                 ebv = dmap(coords)
                 self.Av = float(ebv) * _AV_PER_EBV_PLANCK
         except Exception as e:
-            logger.warning("Dustmap '%s' query failed (%s); using fallback Av=%.2f",
-                           dustmap, e, _AV_FALLBACK)
-            self.Av = _AV_FALLBACK
+            raise ExtinctionError(
+                f"Dustmap '{dustmap}' query failed at "
+                f"(ra={self.ra}, dec={self.dec}, d={d:.1f} pc): "
+                f"{type(e).__name__}: {e}. Pass Av=... explicitly to bypass."
+            ) from e
 
     @classmethod
     def from_ariadne_star(cls, ariadne_star, verbose: bool = True):
