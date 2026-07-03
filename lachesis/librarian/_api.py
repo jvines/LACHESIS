@@ -438,7 +438,7 @@ class Librarian:
                 self._add_mag(
                     band.pyphot,
                     float(mag_v),
-                    float(err_v) if err_v is not None else 0.01,
+                    float(err_v) if err_v is not None else 0.0,
                 )
 
     # ── Gaia TAP crossmatch ──────────────────────────────────────
@@ -548,7 +548,7 @@ class Librarian:
                         mag_v = _col(row, band.col)
                         err_v = _col(row, band.err_col)
                         if _qc_mag(mag_v, err_v):
-                            err_f = float(err_v) if err_v is not None else 0.02
+                            err_f = float(err_v) if err_v is not None else 0.0
                             self._add_mag(band.pyphot, float(mag_v), err_f)
                     continue
 
@@ -715,7 +715,7 @@ class Librarian:
             if not _qc_mag(mag_v, err_v):
                 continue
 
-            err_f = float(err_v) if err_v is not None else 0.02
+            err_f = float(err_v) if err_v is not None else 0.0
             self._add_mag(band.pyphot, float(mag_v), err_f)
 
     def _fetch_tess(self):
@@ -749,7 +749,7 @@ class Librarian:
         mag_v = _col(row, band.col)
         err_v = _col(row, band.err_col)
         if _qc_mag(mag_v, err_v):
-            err_f = float(err_v) if err_v is not None else 0.01
+            err_f = float(err_v) if err_v is not None else 0.0
             self._add_mag(band.pyphot, float(mag_v), err_f)
 
     def _fetch_apass(self):
@@ -781,7 +781,7 @@ class Librarian:
             mag_v = _col(row, band.col)
             err_v = _col(row, band.err_col)
             if _qc_mag(mag_v, err_v):
-                err_f = float(err_v) if err_v is not None else 0.02
+                err_f = float(err_v) if err_v is not None else 0.0
                 self._add_mag(band.pyphot, float(mag_v), err_f)
 
     def _fetch_skymapper(self):
@@ -813,7 +813,7 @@ class Librarian:
             mag_v = _col(row, band.col)
             err_v = _col(row, band.err_col)
             if _qc_mag(mag_v, err_v):
-                err_f = float(err_v) if err_v is not None else 0.02
+                err_f = float(err_v) if err_v is not None else 0.0
                 self._add_mag(band.pyphot, float(mag_v), err_f)
 
     def _fetch_galex(self):
@@ -844,7 +844,7 @@ class Librarian:
                 mag_v = _col(row, band.col)
                 err_v = _col(row, band.err_col)
                 if _qc_mag(mag_v, err_v):
-                    err_f = float(err_v) if err_v is not None else 0.02
+                    err_f = float(err_v) if err_v is not None else 0.0
                     self._add_mag(band.pyphot, float(mag_v), err_f)
         except Exception as e:
             logger.warning("GALEX XMatch query failed: %s", e)
