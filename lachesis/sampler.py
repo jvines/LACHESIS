@@ -9,7 +9,12 @@ import numpy as np
 
 from lachesis.binary import binary_log_likelihood
 from lachesis.interp import GridInterpolator
-from lachesis.likelihood import log_likelihood
+from lachesis.likelihood import (
+    log_likelihood,
+    build_likelihood_plan,
+    eval_likelihood_plan,
+)
+from lachesis.loglike_njit import loglike_kernel, build_njit_args
 from lachesis.prior import IsochronePrior
 
 
@@ -34,6 +39,7 @@ class IsochroneFitter:
         distance_prior: tuple[float, float] | None = None,
         av_range: tuple[float, float] | None = None,
         vini_range: tuple[float, float] | None = None,
+        jitter_range: tuple[float, float] | None = None,
         binary: bool = False,
         imf: str = "chabrier",
         external_kdes: dict | None = None,
@@ -52,6 +58,7 @@ class IsochroneFitter:
             distance_prior=distance_prior,
             av_range=av_range,
             vini_range=vini_range,
+            jitter_range=jitter_range,
             binary=binary,
             imf=imf,
         )
@@ -78,14 +85,51 @@ class IsochroneFitter:
         param_names = prior.param_names
         ext_kdes = self._external_kdes
 
+        # Precompute the parameter-independent part of the likelihood once
+        # (single-star path only). The hot loop then skips rebuilding sets /
+        # re-filtering the observable dicts on every one of O(10^5) calls.
+        like_plan = None
+        njit_args = None
+        if not is_binary:
+            like_plan = build_likelihood_plan(interp, obs, unc, bc)
+            # Fully-JIT'd kernel: eligible only without external-KDE priors
+            # (the ext_kde loop stays in Python). Fuses interp + EEP prior +
+            # likelihood into one njit call, eliminating the predicted-dict.
+            if not ext_kdes:
+                plan, _hp, _const = like_plan
+                try:
+                    njit_args = build_njit_args(interp, bc, prior, plan, _const)
+                except Exception:
+                    njit_args = None
+
+        # Precompute parameter positions once; indexing theta directly avoids
+        # building a dict(zip(...)) on every one of O(10^5) loglike calls.
+        _pidx = {name: i for i, name in enumerate(param_names)}
+        i_eep = _pidx["eep"]
+        i_log_age = _pidx["log_age"]
+        i_feh = _pidx["feh"]
+        i_dist = _pidx.get("distance")
+        i_av = _pidx.get("Av")
+        i_vini = _pidx.get("vini")
+        i_jitter = _pidx.get("jitter")
+        i_eep2 = _pidx.get("eep_secondary")
+
         def loglike(theta):
-            params = dict(zip(param_names, theta))
-            eep = params["eep"]
-            log_age = params["log_age"]
-            feh = params["feh"]
-            distance = params.get("distance")
-            av = params.get("Av")
-            vini = params.get("vini")
+            eep = theta[i_eep]
+            log_age = theta[i_log_age]
+            feh = theta[i_feh]
+            distance = theta[i_dist] if i_dist is not None else None
+            av = theta[i_av] if i_av is not None else None
+            vini = theta[i_vini] if i_vini is not None else None
+            jitter = theta[i_jitter] if i_jitter is not None else 0.0
+
+            # Fully-JIT'd fast path (interp + EEP prior + likelihood fused).
+            if njit_args is not None:
+                return loglike_kernel(
+                    *njit_args, eep, log_age, feh,
+                    distance if distance is not None else np.nan,
+                    av if av is not None else 0.0, jitter,
+                )
 
             # Get grid predictions (needed for both likelihood and IMF prior)
             predicted = interp(eep=eep, log_age=log_age, feh=feh, vini=vini)
@@ -130,17 +174,18 @@ class IsochroneFitter:
                 lnl = binary_log_likelihood(
                     interp, bc=bc,
                     eep_primary=eep,
-                    eep_secondary=params["eep_secondary"],
+                    eep_secondary=theta[i_eep2],
                     log_age=log_age, feh=feh,
                     distance=distance, av=av,
                     observed=obs, uncertainties=unc,
+                    jitter=jitter,
                 )
             else:
-                lnl = log_likelihood(
-                    interp, eep=eep, log_age=log_age, feh=feh,
-                    observed=obs, uncertainties=unc,
+                plan, has_phot, const = like_plan
+                lnl = eval_likelihood_plan(
+                    plan, has_phot, const, predicted, feh,
                     bc_table=bc, distance=distance, av=av,
-                    predicted=predicted,
+                    jitter=jitter,
                 )
 
             if not np.isfinite(lnl):

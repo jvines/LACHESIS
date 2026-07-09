@@ -9,6 +9,8 @@ import numpy as np
 import numba as nb
 from numba import prange
 
+from lachesis.interp import _recompute_linear_from_logs
+
 
 @nb.njit(cache=True)
 def _searchsorted(arr, val):
@@ -262,13 +264,33 @@ class NumbaGridInterpolator:
             )
 
     def __call__(self, eep, log_age, feh, vini=None):
+        # Scalar fast path (the nested-sampling inner loop). np.float64 is a
+        # subclass of float, so dynesty's sampled scalars hit this and skip the
+        # np.asarray round-trip entirely.
+        if (isinstance(eep, (int, float)) and isinstance(log_age, (int, float))
+                and isinstance(feh, (int, float))
+                and (vini is None or isinstance(vini, (int, float)))):
+            if self._has_vini:
+                if vini is None:
+                    raise ValueError("Grid has rotation axis — vini is required")
+                vals = _quadlinear(
+                    self._data, self._feh, self._vini, self._ages, self._eeps,
+                    float(feh), float(vini), float(log_age), float(eep),
+                    self._n_cols,
+                )
+            else:
+                vals = _trilinear(
+                    self._data, self._feh, self._ages, self._eeps,
+                    float(feh), float(log_age), float(eep), self._n_cols,
+                )
+            result = {col: float(vals[i]) for i, col in enumerate(self._columns)}
+            return _recompute_linear_from_logs(result)
+
         eep = np.asarray(eep, dtype=np.float64)
         log_age = np.asarray(log_age, dtype=np.float64)
         feh = np.asarray(feh, dtype=np.float64)
 
         scalar = eep.ndim == 0
-
-        from lachesis.interp import _recompute_linear_from_logs
 
         if self._has_vini:
             if vini is None:
