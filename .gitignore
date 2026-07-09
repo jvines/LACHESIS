@@ -42,3 +42,6 @@ sources/
 
 # Logs
 *.log
+
+# Grids ship as the separate lachesis-grids package (a dependency); kept locally for dev only
+lachesis-grids/
