@@ -29,3 +29,16 @@ __pycache__/
 .venv/
 uv.lock
 test_output*/
+
+# Paper analysis and manuscript material (not part of the package)
+paper_analysis/
+paper_analysis_*/
+sources/
+*.docx
+*_solar_stub.h5
+
+# Claude Code / agent workspace
+.claude/
+
+# Logs
+*.log

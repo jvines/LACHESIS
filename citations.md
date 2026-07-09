@@ -419,7 +419,7 @@ Cite the catalog(s) that provided spectroscopic priors for your target. **LACHES
 }
 ```
 
-Paper in prep — update this entry when the reference is published.
+Paper in prep; update this entry when the reference is published.
 
 ### PASTEL
 

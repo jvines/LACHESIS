@@ -14,6 +14,7 @@ require isochrone models.
 
 # Installation
 
+<!-- DOC:INSTALLATION-START -->
 ```bash
 pip install astroLACHESIS
 ```
@@ -27,9 +28,11 @@ pip install -e .
 ```
 
 All isochrone grids and bolometric correction tables ship with the package
-(~120 MB) — no extra downloads or environment variables needed.
+(~120 MB), no extra downloads or environment variables needed.
+<!-- DOC:INSTALLATION-END -->
 
-# Quick start
+<!-- DOC:USAGE-START -->
+## Quick start
 
 The fastest way to use **LACHESIS** is the one-liner interface. Just give it a
 star name:
@@ -69,7 +72,7 @@ result = lachesis.fit("HD 103095", gaia_id=4034171629042489088)
 result = lachesis.fit("WASP-19", ra=148.417, dec=-45.659)
 ```
 
-# Stellar information setup
+## Stellar information setup
 
 To use **LACHESIS** start by setting up the stellar information, this is done by
 importing the Star module.
@@ -177,7 +180,7 @@ Teff, radius, Av, and distance from ARIADNE; mass, age, and evolutionary state
 from LACHESIS; [Fe/H] and logg from either (both collapse to the spectroscopic
 prior).
 
-# Fitter setup
+## Fitter setup
 
 In this section we'll detail how to set up the fitter for the Bayesian Model
 Averaging (BMA) mode of **LACHESIS**. For single grids the procedure is very
@@ -257,7 +260,7 @@ GALAH, RAVE, LAMOST, or PASTEL, in which case a Gaussian prior is used
 automatically. The default prior for the age is flat in log(age). The default
 prior for Av is a flat prior that ranges from 0 to the maximum line-of-sight
 value from the selected dustmap. The EEP prior is weighted by the initial mass
-function (IMF) and the Jacobian |dM_ini/dEEP| — the default IMF is
+function (IMF) and the Jacobian |dM_ini/dEEP|; the default IMF is
 [Chabrier (2003)](https://ui.adsabs.harvard.edu/abs/2003PASP..115..763C/abstract),
 with [Kroupa (2001)](https://ui.adsabs.harvard.edu/abs/2001MNRAS.322..231K/abstract)
 and [Salpeter (1955)](https://ui.adsabs.harvard.edu/abs/1955ApJ...121..161S/abstract)
@@ -321,7 +324,7 @@ f.show_priors()
 
 ## Single-grid fits
 
-Sometimes you don't want BMA — either because you're targeting a specific
+Sometimes you don't want BMA, either because you're targeting a specific
 stellar population a single grid is best suited for, or because the grid
 itself can't participate in BMA (Geneva/BHAC15/STAREVOL). Set `f.bma = False`
 and a single grid name:
@@ -340,20 +343,20 @@ The routine display will show `Selected engine : Single model (BHAC15)`
 (or whichever grid you chose) to make the mode explicit.
 
 Three grids ship with **LACHESIS** that are only available as single-grid
-fits — they have intentionally narrow coverage that would bias BMA evidence
+fits; they have intentionally narrow coverage that would bias BMA evidence
 comparisons, but they're the right tool for their target populations:
 
-- **BHAC15** (Baraffe+ 2015) — M dwarfs, 0.01–1.4 Msun, solar metallicity.
+- **BHAC15** (Baraffe+ 2015): M dwarfs, 0.01–1.4 Msun, solar metallicity.
   See `test_bhac15.py` for a Proxima Centauri example.
-- **Geneva** (Ekstroem+ 2012) — massive/intermediate-mass tracks, solar
+- **Geneva** (Ekstroem+ 2012): massive/intermediate-mass tracks, solar
   metallicity only. See `test_geneva.py`.
-- **STAREVOL** (Amard+ 2019) — includes stellar rotation (Vini) as a 6th
+- **STAREVOL** (Amard+ 2019): includes stellar rotation (Vini) as a 6th
   sampled parameter. See `test_starevol.py`.
 
 You can also run any of the BMA grids (MIST, PARSEC, etc.) as a single-grid
 fit if you just want the posterior from one specific model.
 
-# Available grids
+## Available grids
 
 | Grid | [Fe/H] range | Age range | EEPs | BMA | Notes |
 |------|:---:|:---:|:---:|:---:|-------|
@@ -371,7 +374,7 @@ parameter coverage (single metallicity, rotation parameter) that would bias the
 evidence comparison. They work well as standalone fits for their target
 populations.
 
-# Visualization
+## Visualization
 
 **LACHESIS** includes a publication-quality plotter that follows ARIADNE's visual
 style (serif fonts, consistent sizing). Like ARIADNE's `SEDPlotter`, you point
@@ -411,19 +414,21 @@ for param, val in latex.items():
 # log_g: $4.35^{+0.02}_{-0.03}$
 ```
 
-For Teff, radius, distance, and Av, use **ARIADNE**'s output — those are better
+For Teff, radius, distance, and Av, use **ARIADNE**'s output; those are better
 constrained by the SED fit.
+<!-- DOC:USAGE-END -->
 
 # Output files
 
+<!-- DOC:OUTPUT-START -->
 When `f.out_folder` is set, **LACHESIS** writes:
 
-- `lachesis_{starname}_BMA.nc` — Full posterior as an arviz InferenceData
+- `lachesis_{starname}_BMA.nc`: Full posterior as an arviz InferenceData
   (netCDF4). This is the canonical format for passing results to downstream
   tools.
-- `lachesis_{starname}_BMA.dat` — Summary statistics (median, 16th/84th
+- `lachesis_{starname}_BMA.dat`: Summary statistics (median, 16th/84th
   percentiles) in human-readable format.
-- `model_weights.dat` — BMA posterior model probabilities and log-evidences per
+- `model_weights.dat`: BMA posterior model probabilities and log-evidences per
   grid.
 
 ## Reading results
@@ -434,22 +439,23 @@ import arviz as az
 idata = az.from_netcdf("output/lachesis_HD_209458_BMA.nc")
 print(idata.posterior)
 ```
+<!-- DOC:OUTPUT-END -->
 
 # The Thread
 
 **LACHESIS** is part of a suite of tools for end-to-end stellar
 characterization. All tools exchange full posteriors via arviz InferenceData in
-netCDF4 format. Each tool is standalone — the pipeline is the happy path, not
+netCDF4 format. Each tool is standalone; the pipeline is the happy path, not
 the only path.
 
-- [**SPECIES**](https://github.com/jvines/species) — Spectroscopic parameters
+- [**SPECIES**](https://github.com/jvines/species): Spectroscopic parameters
   (Teff, logg, [Fe/H], vmic, abundances) from equivalent widths. The most
-  direct atmospheric measurement — no photometry, no evolutionary models.
+  direct atmospheric measurement: no photometry, no evolutionary models.
 - [**ARIADNE**](https://github.com/jvines/astroARIADNE)
   ([Vines & Jenkins 2022](https://ui.adsabs.harvard.edu/abs/2022MNRAS.513.2719V/abstract))
-  — SED fitting for Teff, radius, luminosity, distance, Av. Uses SPECIES
+  : SED fitting for Teff, radius, luminosity, distance, Av. Uses SPECIES
   spectroscopic priors to break SED degeneracies.
-- **LACHESIS** (this tool) — Isochrone fitting for mass, age, evolutionary
+- **LACHESIS** (this tool): Isochrone fitting for mass, age, evolutionary
   state. Uses ARIADNE posteriors ([Fe/H], logg) as KDE priors.
 
 The natural pipeline follows increasing model dependence:
@@ -486,9 +492,9 @@ The natural pipeline follows increasing model dependence:
 
 If you use **LACHESIS** in your research, please cite:
 
-> Vines et al. (in prep.)
+> Vines et al. (submitted to A&A, 2026)
 
-A BibTeX entry will be provided when the paper is published.
+A BibTeX entry and the published reference will be provided once the paper is accepted.
 
 Additionally, you can find how to cite **LACHESIS** and its dependencies
 [here](https://github.com/jvines/LACHESIS/blob/master/citations.md).
