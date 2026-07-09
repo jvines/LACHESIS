@@ -37,8 +37,9 @@ sources/
 *.docx
 *_solar_stub.h5
 
-# Claude Code / agent workspace
+# Claude Code / agent workspace (local instructions, never in the public repo)
 .claude/
+CLAUDE.md
 
 # Logs
 *.log

@@ -16,11 +16,13 @@ def _resolve_grid_dir() -> Path:
         return Path(env_dir)
     try:
         from lachesis_grids import grid_path as _grid_path
-        return _grid_path("mist_v1.2_vvcrit0.4.h5").parent
-    except (ImportError, Exception):
-        # ImportError: package not installed.
-        # Other exceptions: package present but the requested grid is not.
-        return DATAFILES_DIR / "grids"
+    except ImportError as exc:
+        raise ImportError(
+            "Isochrone grids not found: install the 'lachesis-grids' package "
+            "(a dependency of astroLACHESIS) or set LACHESIS_GRID_DIR to a grid "
+            "directory."
+        ) from exc
+    return _grid_path("mist_v1.2_vvcrit0.4.h5").parent
 
 
 GRID_DIR = _resolve_grid_dir()

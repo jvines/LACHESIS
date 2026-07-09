@@ -43,6 +43,7 @@ dependencies = [
     "dynesty>=3.0.0",
     "numba",
     "arviz",
+    "matplotlib",
     "h5netcdf",
     "termcolor",
     "dustmaps>=1.0.14",

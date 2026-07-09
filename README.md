@@ -27,8 +27,9 @@ cd LACHESIS
 pip install -e .
 ```
 
-All isochrone grids and bolometric correction tables ship with the package
-(~120 MB), no extra downloads or environment variables needed.
+The bolometric-correction tables ship with the package, and the isochrone grids
+install automatically as the `lachesis-grids` dependency, so no manual downloads
+or environment variables are needed.
 <!-- DOC:INSTALLATION-END -->
 
 <!-- DOC:USAGE-START -->
