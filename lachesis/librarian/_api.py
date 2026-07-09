@@ -285,18 +285,32 @@ class Librarian:
         radius: float = 3.0,
         ignore: Sequence[str] = (),
         verbose: bool = True,
+        feh_source: str = "hypatia",
+        hypatia_statistic: str = "median",
+        hypatia_uncertainty: str = "std",
+        hypatia_solarnorm: str = "asplund09",
+        feh_floor: float = 0.10,
     ):
         self.ra = ra
         self.dec = dec
         self._search_radius = radius * u.arcsec
         self._coord = SkyCoord(ra=ra, dec=dec, unit="deg")
         self._ignore = set(ignore)
+        # [Fe/H] prior configuration.
+        #   feh_source: "hypatia" → Hypatia for [Fe/H] (survey fallback on miss),
+        #               surveys for Teff/logg; "survey" → surveys only.
+        self._feh_source = feh_source
+        self._hypatia_statistic = hypatia_statistic
+        self._hypatia_uncertainty = hypatia_uncertainty
+        self._hypatia_solarnorm = hypatia_solarnorm
+        self._feh_floor = feh_floor
 
         self._magnitudes: dict[str, tuple[float, float]] = {}
         self._gaia_id: int | None = gaia_id
         self._ids: dict[str, str | int | None] = {}
         self._parallax: float | None = None
         self._parallax_e: float | None = None
+        self._ruwe: float | None = None
         self._teff: float | None = None
         self._teff_e: float | None = None
         self._radius_flame: float | None = None
@@ -375,6 +389,20 @@ class Librarian:
             self._parallax = float(plx) + _PLX_ZEROPOINT
             if plx_e is not None:
                 self._parallax_e = np.sqrt(float(plx_e) ** 2 + _PLX_SYS_ERR**2)
+
+        # RUWE > 1.4 flags an astrometric non-single source (unresolved binary or
+        # companion). Gaia then blends the combined light, so the photometric
+        # luminosity -- and any radius/age inferred from it -- is inflated.
+        # LACHESIS fits a single star, so warn loudly.
+        ruwe = _col(main, "RUWE")
+        if ruwe is not None:
+            self._ruwe = float(ruwe)
+            if self._ruwe > 1.4:
+                print(colored(
+                    f"\t\t\tWARNING: Gaia RUWE = {self._ruwe:.2f} > 1.4 -- likely an "
+                    f"unresolved binary; the photometric luminosity (and the radius/"
+                    f"age derived from it) may be inflated. LACHESIS fits a single "
+                    f"star.", "red"))
 
         # Gaia GSP-Phot Teff is intentionally NOT extracted as a likelihood
         # prior. The photometric SED already constrains Teff via BC tables;
@@ -983,23 +1011,67 @@ class Librarian:
     # ── Spectroscopic parameters ─────────────────────────────────
 
     def _query_spectroscopic_priors(self):
-        """Try spectroscopic catalogs in priority order; stop at first match.
+        """Assemble spectroscopic priors (Teff, logg, [Fe/H]).
 
-        Priority: APOGEE DR17 > GALAH DR3 > RAVE DR6 > LAMOST DR11 > PASTEL.
+        Teff/logg come from the survey priority chain (first match wins):
+        PASTEL > APOGEE DR17 > GALAH DR3 > RAVE DR6 > LAMOST DR11.
+
+        [Fe/H] depends on ``feh_source``:
+          * "hypatia" (default) — the Hypatia Catalog, a multi-study
+            high-resolution-spectroscopy compilation whose spread gives a
+            realistic σ; falls back to the survey-chain [Fe/H] on a Hypatia
+            miss.
+          * "survey" — use the survey-chain [Fe/H] (legacy behaviour).
         """
+        base = None
         for query_fn, source_name in [
+            (self._query_pastel, "PASTEL"),
             (self._query_apogee, "APOGEE_DR17"),
             (self._query_galah, "GALAH_DR3"),
             (self._query_rave, "RAVE_DR6"),
             (self._query_lamost, "LAMOST_DR11"),
-            (self._query_pastel, "PASTEL"),
         ]:
             result = query_fn()
             if result is not None:
                 result["source"] = source_name
-                self._spectroscopic_params = result
+                base = result
                 logger.info("Spectroscopic params from %s", source_name)
-                return
+                break
+
+        if self._feh_source == "hypatia":
+            hyp = self._query_hypatia()
+            if hyp is not None:
+                if base is None:
+                    base = {"teff": None, "teff_err": None,
+                            "logg": None, "logg_err": None,
+                            "source": None}
+                base["feh"] = hyp["feh"]
+                base["feh_err"] = hyp["feh_err"]
+                base["feh_source"] = "Hypatia"
+                base["feh_n_meas"] = hyp["n_meas"]
+                base["feh_solarnorm"] = hyp["solarnorm"]
+                base["feh_statistic"] = hyp["statistic"]
+                base["feh_uncertainty"] = hyp["uncertainty"]
+                logger.info("[Fe/H] from Hypatia: %.3f ± %.3f (n=%d, %s)",
+                            hyp["feh"], hyp["feh_err"], hyp["n_meas"],
+                            hyp["matched_name"])
+
+        self._spectroscopic_params = base
+
+    def _query_hypatia(self) -> dict | None:
+        """Query the Hypatia Catalog for [Fe/H] using the configured options."""
+        from lachesis.librarian._hypatia import query_hypatia_feh
+        names = []
+        tmass = self._ids.get("2MASS") if self._ids else None
+        if tmass:
+            names.append(f"2MASS J{tmass}")
+        return query_hypatia_feh(
+            self._gaia_id, names,
+            statistic=self._hypatia_statistic,
+            uncertainty=self._hypatia_uncertainty,
+            solarnorm=self._hypatia_solarnorm,
+            floor=self._feh_floor,
+        )
 
     def _query_apogee(self) -> dict | None:
         """Query APOGEE DR17 via VizieR (III/286).
@@ -1306,6 +1378,10 @@ class Librarian:
         if self._parallax is not None:
             print(colored(f"{t3}Gaia Parallax : ", c), end='')
             print(colored(f"{self._parallax:.3f} +/- {self._parallax_e:.3f}", c))
+        if self._ruwe is not None:
+            print(colored(f"{t3}Gaia RUWE : ", c), end='')
+            tag = "  (>1.4: likely unresolved binary)" if self._ruwe > 1.4 else ""
+            print(colored(f"{self._ruwe:.2f}{tag}", c))
         if self._distance is not None:
             print(colored(f"{t3}Bailer-Jones distance : ", c), end='')
             print(colored(f"{self._distance:.3f} +/- {self._distance_e:.3f}", c))
@@ -1323,6 +1399,13 @@ class Librarian:
         if self._parallax is None:
             return None
         return (self._parallax, self._parallax_e)
+
+    @property
+    def ruwe(self) -> float | None:
+        """Gaia DR3 RUWE. > 1.4 indicates a likely unresolved binary, whose
+        blended light inflates the photometric luminosity (and the inferred
+        radius/age)."""
+        return self._ruwe
 
     @property
     def teff(self) -> tuple[float, float] | None:
