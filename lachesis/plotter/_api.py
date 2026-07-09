@@ -105,7 +105,7 @@ class ISOPlotter:
 
         idata = az.from_netcdf(str(path))
 
-        _SKIP_DERIVED = {"eep", "log_age", "feh", "distance", "Av", "age"}
+        _SKIP_DERIVED = {"eep", "log_age", "feh", "distance", "Av", "age", "jitter"}
 
         def _group_ds(group):
             """Return the xarray Dataset for a DataTree group."""
@@ -113,7 +113,7 @@ class ISOPlotter:
 
         def _ds_to_samples_and_derived(ds):
             cols = []
-            for k in ("eep", "log_age", "feh", "eep_secondary", "distance", "Av", "vini"):
+            for k in ("eep", "log_age", "feh", "eep_secondary", "distance", "Av", "vini", "jitter"):
                 if k in ds:
                     cols.append(ds[k].values.flatten())
             samples = np.column_stack(cols) if cols else np.empty((0, 0))
@@ -387,13 +387,13 @@ class ISOPlotter:
         """Per-parameter BMA histograms (mirrors ARIADNE's plot_bma_hist).
 
         Writes two files per parameter into ``{out_folder}/histograms/``:
-        - ``{param}.png``          — normalized (PDF) panel
-        - ``weighted_{param}.png`` — weighted counts (N) panel
+        - ``{param}.png``: normalized (PDF) panel
+        - ``weighted_{param}.png``: weighted counts (N) panel
 
         In BMA mode, each model gets its own colored histogram + KDE.  The
         PDF panel additionally shows TWO combined posteriors:
-        - Weighted sampling (cyan, dashed)  — BMA-weighted draws
-        - Weighted average  (pink,  dash-dot) — sum_i w_i * kde_i(x)
+        - Weighted sampling (cyan, dashed): BMA-weighted draws
+        - Weighted average (pink, dash-dot): sum_i w_i * kde_i(x)
         """
         import os
 
@@ -547,7 +547,7 @@ class ISOPlotter:
         Best-fit track as mass-colored LineCollection.  Random BMA-weighted
         posterior draws as gray lines for uncertainty.  Star position with
         error bars.  Grids are loaded automatically from the shipped HDF5
-        cache based on the .nc's model names — no need to pass them in.
+        cache based on the .nc's model names; no need to pass them in.
         """
         result = self.result
         filename = f"{self.out_folder}/HR_diagram{self._ext}"
@@ -751,7 +751,7 @@ class ISOPlotter:
         """Multi-panel summary figure.
 
         Layout (2x2 GridSpec):
-          [0,0] corner (mass, Teff, age) — mini 3x3
+          [0,0] corner (mass, Teff, age): mini 3x3
           [0,1] HR diagram
           [1,0] Mass-Age
           [1,1] Model weights (BMA) or [Fe/H] marginal

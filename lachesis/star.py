@@ -134,6 +134,11 @@ class Star:
             self.luminosity_e = None
             self.radius = None
             self.radius_e = None
+            # Gaia FLAME radius (already fetched by the Librarian): not a
+            # likelihood observable, kept only for pre-fit evolutionary
+            # triage (see evolutionary_state).
+            self.radius_flame = lib._radius_flame
+            self.radius_flame_e = lib._radius_flame_e
 
             # Spectroscopic priors: user override > Librarian lookup
             sp = lib._spectroscopic_params
@@ -171,6 +176,8 @@ class Star:
             self.luminosity_e = None
             self.radius = None
             self.radius_e = None
+            self.radius_flame = None
+            self.radius_flame_e = None
             self.spectroscopic_source = (
                 "user_supplied" if (logg is not None or feh is not None) else None
             )
@@ -182,13 +189,26 @@ class Star:
             if self.parallax_e is not None:
                 self.distance_e = self.distance * (self.parallax_e / self.parallax)
 
-        # Max line-of-sight extinction from dustmaps (like ARIADNE)
+        # Local Bubble shortcut: for stars within ~70 pc the SFD/Planck
+        # all-the-way-to-infinity dust column drastically over-estimates the
+        # actual foreground extinction (the LB is essentially dust-free out
+        # to ≳ 80 pc; cf. Lallement+19, Vergely+22). Fix Av = 0 for nearby
+        # stars unless the user explicitly supplied an Av.
+        if self.Av is None and self.distance is not None and self.distance < 70.0:
+            self.Av = 0.0
+        # Otherwise, query the dustmap for the line-of-sight upper bound.
         if self.Av is None:
             self._query_extinction(dustmap)
 
-        # Photometry QC: flag outliers (warn only, no removal)
+        # Photometry QC, three independent checks (warn-only):
+        #   1. BC-table consensus fit + per-catalogue coherent offset
+        #   2. ARIADNE-equivalent blackbody fit
+        # All flagged bands accumulate on the Star instance under
+        # `_qc_flagged_bands`, `_qc_catalogue_flags`,
+        # `_qc_bb_flagged_bands` — the user decides removal.
         if self.magnitudes:
             self._photometry_check()
+            self._photometry_check_blackbody()
 
     _DUSTMAPS = {
         'SFD': ('dustmaps.sfd', 'SFDQuery'),
@@ -257,7 +277,7 @@ class Star:
         """Create a LACHESIS Star from an astroARIADNE Star object.
 
         Extracts magnitudes, parallax, distance, and spectroscopic params.
-        Works with any ARIADNE Star — just pass the object directly.
+        Works with any ARIADNE Star; just pass the object directly.
 
         Example
         -------
@@ -428,7 +448,205 @@ class Star:
 
     _GAIA_PREFIXES = ("Gaia_", "GaiaDR")
 
-    def _photometry_check(self, sigma=5.0, err_floor=0.05):
+    # Catalogue → band-name prefix mapping used for catalogue-coherent
+    # offset detection. Bands with the same source catalogue should share
+    # a single per-source cross-match; a coherent offset of the whole group
+    # is a tell-tale sign that catalogue was matched to the wrong sky source.
+    _CATALOGUE_PREFIXES = {
+        "Gaia":       ("Gaia_", "GaiaDR"),
+        "2MASS":      ("2MASS_",),
+        "WISE":       ("WISE_",),
+        "PanSTARRS":  ("PS1_",),
+        "SDSS":       ("SDSS_",),
+        "Tycho":      ("TYCHO2_", "TYCHO_"),
+        "APASS":      ("APASS_",),
+        "SkyMapper":  ("SkyMapper_",),
+        "GALEX":      ("GALEX_",),
+        "Johnson":    ("Bessell_", "GROUND_JOHNSON_"),
+        "TESS":       ("TESS",),
+    }
+
+    def _band_catalogue(self, band: str) -> str | None:
+        for cat, prefixes in self._CATALOGUE_PREFIXES.items():
+            if any(band.startswith(p) for p in prefixes):
+                return cat
+        return None
+
+    # ── ARIADNE-style blackbody QC ─────────────────────────────────────
+    # Zero-point fluxes (erg / cm² / s / Å at effective wavelength).
+    # Vega convention for most catalogues, AB monochromatic flux density
+    # f_ν = 3631 Jy = 3.631e-20 erg/s/cm²/Hz converted to f_λ for AB ones.
+    _AB_FNU = 3.631e-20  # erg/s/cm²/Hz, AB zero point
+    _AB_FAMILIES = ("SDSS_", "PS1_", "GALEX_", "SkyMapper_")
+
+    def _photometry_check_blackbody(self, fit_tol=0.5, flag_tol=0.75,
+                                     flag_tol_model=1.5, err_floor=0.05,
+                                     T_min=2000.0, T_max=60000.0,
+                                     n_T=300):
+        """Iterative SED outlier rejection using a pure-Planck synthetic SED.
+
+        Fits a blackbody across [T_min, T_max], compares observed magnitudes
+        to synthetic BB magnitudes via per-filter zero-point fluxes, seeds the
+        trusted set from Gaia anchors and iteratively promotes untrusted bands
+        within *fit_tol* magnitudes so the fit stays anchored to well-behaved
+        photometry. Outlier strength is the magnitude deviation from the model
+        SED, deliberately independent of the photometric errorbar, so a wildly
+        discrepant point carrying a large error cannot hide below threshold.
+
+        A band is flagged when its deviation exceeds the flag tolerance. That
+        tolerance is *flag_tol* in the optical, where a blackbody is a good
+        model, but *flag_tol_model* in the IR (Rayleigh-Jeans, molecular bands)
+        and the blue/UV (Balmer jump, line blanketing), where a single-Planck
+        SED deviates by up to ~1.4 mag for real stars; flagging those as bad
+        photometry would be wrong. Contamination (saturation, cross-match) sits
+        at >=5 mag, far above either tolerance. Warn-only; the user decides.
+        """
+        from lachesis.filters import FILTER_WAVELENGTH
+
+        # Physical constants (SI for the Planck-law form below)
+        h = 6.62607015e-34
+        c = 2.99792458e8
+        k = 1.380649e-23
+
+        bands, mags, errs, lam_um = [], [], [], []
+        for b, (m, e) in self.magnitudes.items():
+            lam = FILTER_WAVELENGTH.get(b)
+            if lam is None or e <= 0:
+                continue
+            bands.append(b); mags.append(m); errs.append(max(e, err_floor))
+            lam_um.append(lam)
+        if len(bands) < 3:
+            self._qc_bb_flagged_bands = []
+            return
+        bands = np.array(bands)
+        mags  = np.array(mags)
+        errs  = np.array(errs)
+        lam_m = np.array(lam_um) * 1e-6  # μm → m
+
+        # Per-filter Vega/AB zero-point flux density (erg/s/cm²/Å).
+        f0 = np.empty(len(bands))
+        for i, b in enumerate(bands):
+            if any(b.startswith(p) for p in self._AB_FAMILIES):
+                # AB: f_ν = 3631 Jy; convert to f_λ at λ_eff
+                lam_A = lam_um[i] * 1e4  # Å
+                f0[i] = self._AB_FNU * c * 1e10 / lam_A**2  # erg/s/cm²/Å
+            else:
+                # Vega: pyphot Vega_zero_flux on best-matching filter name.
+                f0[i] = self._vega_zero_flux(b, lam_um[i])
+
+        def _synth_mags(T):
+            x = h * c / (lam_m * k * max(T, 1.0))
+            B = 1.0 / (lam_m**5 * (np.exp(np.clip(x, 0, 500)) - 1.0))
+            return -2.5 * np.log10(np.maximum(B / f0, 1e-300))
+
+        def _residuals(fit_idx):
+            if len(fit_idx) < 2:
+                return np.full(len(mags), np.inf), 5000.0, 0.0
+            best_resid = np.full(len(mags), np.inf)
+            best_rss = np.inf
+            best_T, best_off = 5000.0, 0.0
+            for T in np.linspace(T_min, T_max, n_T):
+                model = _synth_mags(T)
+                offset = np.mean(mags[fit_idx] - model[fit_idx])
+                resid = np.abs(mags - (model + offset))
+                rss = np.sum(resid[fit_idx]**2)
+                if rss < best_rss:
+                    best_rss = rss
+                    best_resid = resid
+                    best_T = T
+                    best_off = offset
+            return best_resid, best_T, best_off
+
+        gaia_mask = np.array([any(b.startswith(p) for p in self._GAIA_PREFIXES)
+                              for b in bands])
+        if np.any(gaia_mask):
+            trusted = gaia_mask.copy()
+            while True:
+                untrusted_idx = np.where(~trusted)[0]
+                if len(untrusted_idx) == 0:
+                    break
+                resid, _, _ = _residuals(np.where(trusted)[0])
+                z = resid  # |Δmag| from the model; errorbar deliberately ignored
+                best = untrusted_idx[np.argmin(z[untrusted_idx])]
+                if z[best] < fit_tol:
+                    trusted[best] = True
+                else:
+                    break
+            outlier_idx = np.where(~trusted)[0]
+        else:
+            active = np.ones(len(bands), dtype=bool)
+            while True:
+                active_idx = np.where(active)[0]
+                if len(active_idx) < 4:
+                    break
+                resid, _, _ = _residuals(active_idx)
+                z = resid  # |Δmag| from the model; errorbar deliberately ignored
+                worst = active_idx[np.argmax(z[active_idx])]
+                if z[worst] >= fit_tol:
+                    active[worst] = False
+                else:
+                    break
+            outlier_idx = np.where(~active)[0]
+
+        # Final fit on the trusted set, capturing T and offset for plotting.
+        trusted_idx = np.setdiff1d(np.arange(len(bands)), outlier_idx)
+        resid_final, best_T, best_offset = _residuals(trusted_idx)
+        self._qc_bb_teff = float(best_T)
+        self._qc_bb_offset = float(best_offset)
+        # Persist f0 so the plotting routine can reconstruct the BB curve in
+        # F_λ units without recomputing zero points.
+        self._qc_bb_f0_per_band = dict(zip(bands.tolist(), f0.tolist()))
+
+        from termcolor import colored
+        # Flag on the deviation from the final BB, but loosen the tolerance
+        # where the blackbody itself is an unreliable model (IR and blue/UV),
+        # so genuine model deviation is not mistaken for bad photometry. The
+        # trusted set above still used the tight fit_tol, so the fit is robust.
+        def _bb_unreliable(b):
+            return (b.startswith(("2MASS_", "WISE_", "SPITZER_", "GALEX_",
+                                  "STROMGREN_"))
+                    or b in ("GROUND_JOHNSON_U", "GROUND_JOHNSON_B"))
+        flagged = []
+        for i in range(len(bands)):
+            tol = flag_tol_model if _bb_unreliable(bands[i]) else flag_tol
+            if resid_final[i] > tol:
+                z = resid_final[i]  # |Δmag| from the BB model
+                flagged.append((bands[i], float(z)))
+                print(colored(
+                    f"\t\t\tWARNING: {bands[i]} flagged "
+                    f"(blackbody QC, {z:.2f} mag from BB fit at T={best_T:.0f} K) -- not removed",
+                    "magenta",
+                ))
+        self._qc_bb_flagged_bands = [b for b, _ in flagged]
+
+    @staticmethod
+    def _vega_zero_flux(pyphot_name: str, lam_um: float) -> float:
+        """Vega zero-point f_λ in erg/s/cm²/Å, from pyphot's filter library.
+
+        pyphot is a hard dependency (see pyproject). Raises if the filter
+        cannot be resolved rather than substituting an approximate value: a
+        missing zero point must surface loudly, not silently miscalibrate the
+        SED QC. (The old blackbody fallback was ~5.4 mag off and made every
+        AB-system band look like a saturated outlier.)
+        """
+        import pyphot
+        lib = pyphot.get_library()
+        for candidate in (pyphot_name, pyphot_name.replace("Gaia_", "GaiaDR3_"),
+                          pyphot_name.replace("Gaia_", "GaiaDR2_"),
+                          pyphot_name.replace("WISE_RSR_", "WISE_"),
+                          pyphot_name.replace("TYCHO_", "Tycho_"),
+                          pyphot_name.replace("_MvB", "")):
+            if candidate in lib.content:
+                return float(lib[candidate].Vega_zero_flux.to_value(
+                    "erg / (Angstrom s cm2)"))
+        raise ValueError(
+            f"pyphot has no Vega zero point for filter {pyphot_name!r} "
+            f"(tried name variants). Add a name mapping or zero point; do not "
+            f"approximate."
+        )
+
+    def _photometry_check(self, mag_tol=0.75, err_floor=0.05,
+                          catalogue_mag_tol=0.5):
         """Iterative photometric outlier detection via BC table model.
 
         Uses bolometric correction tables (proper synthetic photometry
@@ -523,9 +741,9 @@ class Star:
                 if len(untrusted_idx) == 0:
                     break
                 resid, _, _ = _fit_residuals(np.where(trusted)[0])
-                z = resid / errs
+                z = resid  # |Δmag| from the model; errorbar deliberately ignored
                 best = untrusted_idx[np.argmin(z[untrusted_idx])]
-                if z[best] < sigma:
+                if z[best] < mag_tol:
                     trusted[best] = True
                 else:
                     break
@@ -538,9 +756,9 @@ class Star:
                 if len(active_idx) < 4:
                     break
                 resid, _, _ = _fit_residuals(active_idx)
-                z = resid / errs
+                z = resid  # |Δmag| from the model; errorbar deliberately ignored
                 worst = active_idx[np.argmax(z[active_idx])]
-                if z[worst] >= sigma:
+                if z[worst] >= mag_tol:
                     active[worst] = False
                 else:
                     break
@@ -560,7 +778,7 @@ class Star:
         flagged = []
 
         for i, b in enumerate(bands):
-            z = abs(mags[i] - pred[i]) / errs[i] if not np.isnan(pred[i]) else 0.0
+            z = abs(mags[i] - pred[i]) if not np.isnan(pred[i]) else 0.0
             self._phot_residuals[b] = (
                 wavelengths[i],  # microns
                 mags[i], pred[i], z,
@@ -568,14 +786,63 @@ class Star:
             if outlier_mask[i]:
                 flagged.append((b, z))
 
+        # ── Catalogue-coherent offset check ───────────────────────────────
+        # Group residuals by source catalogue. A whole catalogue whose *mean
+        # signed* magnitude offset exceeds catalogue_mag_tol is almost certainly
+        # mis-cross-matched (the catalogue picked up a different sky source). The
+        # mean cancels for non-coherent scatter, so it isolates genuine bulk
+        # offsets. Errorbar-independent and magnitude-scaled: a 0.2 mag zero-
+        # point difference between systems is left alone, while a real cross-
+        # match (>=0.5 mag bulk shift) flags the whole group at once.
+        cat_flags: dict[str, dict] = {}
+        signed_dev = np.where(np.isnan(pred), 0.0, mags - pred)  # magnitudes
+        for cat in self._CATALOGUE_PREFIXES:
+            idx = np.array([i for i, b in enumerate(bands)
+                            if self._band_catalogue(b) == cat])
+            if len(idx) < 2:
+                continue
+            mean_dev = float(np.mean(signed_dev[idx]))
+            if abs(mean_dev) > catalogue_mag_tol:
+                cat_flags[cat] = {
+                    "mean_dev": mean_dev,
+                    "n_bands": len(idx),
+                    "bands": [bands[i] for i in idx],
+                }
+                # If they survived the per-band trusted set, still mark them
+                # as outliers so callers / `auto_remove` can act.
+                outlier_mask[idx] = True
+                for i in idx:
+                    dev = abs(mags[i] - pred[i]) if not np.isnan(pred[i]) else 0.0
+                    if (bands[i], dev) not in flagged:
+                        flagged.append((bands[i], dev))
+
+        from termcolor import colored
+        if cat_flags:
+            for cat, info in cat_flags.items():
+                msg = (
+                    f"\t\t\tWARNING: catalogue '{cat}' has a coherent "
+                    f"{info['mean_dev']:+.2f} mag offset across {info['n_bands']} "
+                    f"bands; likely cross-matched to a different source"
+                )
+                print(colored(msg, "red"))
+
+        # Per-band warnings (still distinguish "flagged via per-band sigma"
+        # from "flagged via catalogue-coherent offset" in the message).
+        cat_member_bands = {b for info in cat_flags.values() for b in info["bands"]}
         if flagged:
-            from termcolor import colored
             for b, z in flagged:
+                via_cat = b in cat_member_bands
+                tag = ("catalogue-coherent offset" if via_cat
+                       else "per-band outlier")
                 print(colored(
-                    f"\t\t\tWARNING: {b} is potentially problematic "
-                    f"({z:.1f}sigma from photometry consensus fit) -- not removed",
+                    f"\t\t\tWARNING: {b} flagged ({tag}, {z:.2f} mag from "
+                    f"photometry consensus fit) -- not removed",
                     "yellow",
                 ))
+
+        # Persist QC artefacts so plotters / callers can act on them.
+        self._qc_catalogue_flags = cat_flags
+        self._qc_flagged_bands = [b for b, _ in flagged]
 
     def plot_photometry(self, outfile=None):
         """Diagnostic plot: BC-model fit with color-coded photometry.
@@ -669,6 +936,182 @@ class Star:
             plt.close(fig)
         else:
             plt.show()
+
+    def plot_SED_no_model(self, outfile: str | None = None):
+        """ARIADNE-style raw SED plot: λF_λ vs λ in log-log, no model overlay.
+
+        Each band is drawn as a coloured point with its own marker, with
+        photometric error bars and the filter bandpass shown as horizontal
+        x-error bars. QC-flagged bands (from either the BC-table or the
+        blackbody check) are outlined in red and labelled with the flag
+        reason. Designed for user inspection: eyeballing whether a given
+        catalogue's points "belong" to the same SED as the rest.
+        """
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as ticker
+        from lachesis.filters import FILTER_WAVELENGTH
+
+        # Collect bands with wavelengths
+        bands, mags, errs, lam_um = [], [], [], []
+        for b, (m, e) in self.magnitudes.items():
+            lam = FILTER_WAVELENGTH.get(b)
+            if lam is None or e <= 0:
+                continue
+            bands.append(b); mags.append(m); errs.append(e); lam_um.append(lam)
+        if not bands:
+            return
+        bands = np.array(bands)
+        mags  = np.array(mags)
+        errs  = np.array(errs)
+        lam_um = np.array(lam_um)
+
+        # Per-filter zero-point for mag → F_λ conversion
+        f0 = np.array([self._vega_zero_flux(b, lam) for b, lam in zip(bands, lam_um)])
+        for i, b in enumerate(bands):
+            if any(b.startswith(p) for p in self._AB_FAMILIES):
+                lam_A = lam_um[i] * 1e4
+                f0[i] = self._AB_FNU * 2.99792458e8 * 1e10 / lam_A**2
+        F_lam   = f0 * 10.0 ** (-0.4 * mags)        # erg/s/cm²/Å
+        F_err   = F_lam * np.log(10) * 0.4 * errs   # propagated 1-σ
+        lF_l    = F_lam * (lam_um * 1e4)            # λF_λ in erg/s/cm² (Å as bandpass scale)
+        lF_l_err = F_err * (lam_um * 1e4)
+
+        # Approximate bandpass width — 15% of λ_eff if not otherwise known.
+        bp = lam_um * 0.15
+
+        # Colour each point by its effective wavelength so the SED shape
+        # reads directly off the plot (blue → short λ, red → long λ).
+        cmap = plt.cm.RdYlBu_r
+        lam_log = np.log10(lam_um)
+        norm = plt.Normalize(vmin=lam_log.min(), vmax=lam_log.max())
+        colours = cmap(norm(lam_log))
+
+        flagged = set(getattr(self, "_qc_flagged_bands", []) +
+                      getattr(self, "_qc_bb_flagged_bands", []))
+
+        fig, ax = plt.subplots(figsize=(8.5, 5.5))
+
+        # Blackbody curve from the QC fit, if available. Scale fit to the
+        # *observed* λF_λ on the trusted bands (the ones not flagged by
+        # either QC check) so the curve actually overlays the data rather
+        # than sitting at some abstract zero-point reference.
+        bb_T = getattr(self, "_qc_bb_teff", None)
+        if bb_T is not None and bb_T > 0:
+            h_, c_, k_ = 6.62607015e-34, 2.99792458e8, 1.380649e-23
+
+            def _planck(lam_um_arr):
+                lam_m = lam_um_arr * 1e-6
+                x = h_ * c_ / (lam_m * k_ * bb_T)
+                return 1.0 / (lam_m**5 * (np.exp(np.clip(x, 0, 500)) - 1.0))
+
+            # Trusted bands = those not flagged. Use them to set the scale.
+            trusted_mask = np.array([b not in flagged for b in bands])
+            if trusted_mask.sum() < 2:
+                trusted_mask = np.ones(len(bands), dtype=bool)
+            B_at_bands = _planck(lam_um)
+            # log-space ratio so the scale is robust to a single bright band.
+            log_scale = float(np.median(
+                np.log10(F_lam[trusted_mask]) - np.log10(B_at_bands[trusted_mask])
+            ))
+            scale = 10.0 ** log_scale
+
+            lam_curve = np.logspace(np.log10(max(lam_um.min() * 0.5, 0.1)),
+                                    np.log10(lam_um.max() * 2.0), 400)
+            F_lam_curve = _planck(lam_curve) * scale
+            lF_l_curve = F_lam_curve * (lam_curve * 1e4)
+            ax.plot(lam_curve, lF_l_curve,
+                    color="0.4", lw=1.0, ls="--",
+                    label=f"BB fit, $T={bb_T:.0f}$ K", zorder=1)
+
+        for i, b in enumerate(bands):
+            edge = "red" if b in flagged else "black"
+            lw_e = 1.2 if b in flagged else 0.5
+            ax.errorbar(lam_um[i], lF_l[i],
+                        xerr=bp[i], yerr=lF_l_err[i],
+                        fmt="none", ecolor=colours[i], elinewidth=0.9,
+                        capsize=0, alpha=0.85, zorder=2)
+            ax.scatter(lam_um[i], lF_l[i],
+                       s=60, c=[colours[i]], edgecolors=edge,
+                       linewidths=lw_e, label=b, zorder=3)
+
+        ax.set_xscale("log"); ax.set_yscale("log")
+        ax.set_xlabel(r"Wavelength  ($\mu$m)")
+        ax.set_ylabel(r"$\lambda F_\lambda$  (erg s$^{-1}$ cm$^{-2}$)")
+        ax.tick_params(which="both", direction="in")
+        ax.xaxis.set_major_locator(ticker.LogLocator(subs=(1.0, 2.0, 5.0)))
+        ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
+        # x-range from data, modest pad
+        ax.set_xlim(lam_um.min() * 0.7, lam_um.max() * 1.4)
+
+        # Per-band legend (one entry per band, as before).
+        ncol = 2 if len(bands) <= 16 else 3
+        ax.legend(fontsize=7, ncol=ncol, loc="best", framealpha=0.85)
+
+        # Annotate flagged bands in-plot at their data positions so the
+        # warning can't collide with the legend.
+        for i, b in enumerate(bands):
+            if b in flagged:
+                ax.annotate(b, (lam_um[i], lF_l[i]),
+                            xytext=(4, 6), textcoords="offset points",
+                            fontsize=7, color="red", zorder=10)
+
+        fig.tight_layout()
+        if outfile:
+            fig.savefig(outfile, dpi=200, bbox_inches="tight")
+            plt.close(fig)
+        else:
+            plt.show()
+
+    @property
+    def evolutionary_state(self) -> str:
+        """Pre-fit evolutionary classification: 'ms', 'subgiant', 'giant', or
+        'unknown'. Used to triage grid coverage before fitting (grids without
+        giant coverage, e.g. YaPSI, are dropped up front); never enters the
+        likelihood.
+
+        Cascades three tiers, most direct first:
+
+        1. Spectroscopic log g (survey chain): >= 4.0 ms, 3.2-4.0 subgiant,
+           < 3.2 giant. Dwarf/giant is a > 1 dex contrast, so survey-quality
+           log g (~0.2-0.3 dex) settles it.
+        2. Gaia FLAME radius: R > 4 Rsun is safely post-subgiant for FGK.
+           FLAME is model-informed, so this tier only flags clear giants.
+        3. Dereddened Gaia CMD position: the giant branch sits several
+           magnitudes above the MS at fixed colour, so M_G < 3.5 at
+           (BP-RP)_0 > 0.95 is unambiguous (an equal-luminosity MS binary
+           lifts a star only 0.75 mag, well short of the cut). Extinction
+           coefficients A_G = 0.789 Av, E(BP-RP) = 0.413 Av (Wang & Chen
+           2019).
+
+        Tiers 2-3 cannot separate ms from subgiant without a model, so when
+        they do not flag a giant the state is 'unknown' rather than a guess.
+        """
+        if self.logg is not None:
+            if self.logg < 3.2:
+                return "giant"
+            if self.logg < 4.0:
+                return "subgiant"
+            return "ms"
+        rf = getattr(self, "radius_flame", None)
+        if rf is not None and rf > 4.0:
+            return "giant"
+        def _mag(*keys):
+            for k in keys:
+                v = self.magnitudes.get(k)
+                if v is not None and v[0] is not None:
+                    return float(v[0])
+            return None
+        g = _mag("Gaia_G", "Gaia_G_EDR3")
+        bp = _mag("Gaia_BP", "Gaia_BP_EDR3")
+        rp = _mag("Gaia_RP", "Gaia_RP_EDR3")
+        plx = self.parallax
+        if None not in (g, bp, rp) and plx is not None and plx > 0:
+            av = self.Av if self.Av is not None else 0.0
+            abs_g = g + 5.0 * np.log10(plx) - 10.0 - 0.789 * av
+            bprp0 = (bp - rp) - 0.413 * av
+            if abs_g < 3.5 and bprp0 > 0.95:
+                return "giant"
+        return "unknown"
 
     @property
     def observed(self) -> dict[str, float]:

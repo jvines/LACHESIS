@@ -5,6 +5,7 @@ Apparent magnitude: m_band = M_band + 5 * log10(distance_pc / 10)
 """
 
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -444,7 +445,24 @@ class BCTable:
         distance_pc: float,
         bands: list[str] | None = None,
     ) -> dict[str, float]:
-        """Apparent magnitude: m = M + 5*log10(d/10)."""
+        """Apparent magnitude: m = Mbol - BC + 5*log10(d/10).
+
+        Single-pass hot path: interpolates the BC once and folds the bolometric
+        magnitude and distance modulus straight in, avoiding the two
+        intermediate dicts of get_bc → get_absolute_mag (this is called once per
+        likelihood evaluation, O(10^5–10^6) times per fit).
+        """
+        if _HAS_NUMBA and bands is None:
+            band_names = self._active_bands if self._active_bands is not None else self._bands
+            grid = self._active_grid if self._active_grid is not None else self._grid
+            n = len(band_names)
+            vals = _quadlinear(
+                grid, self._ax_teff, self._ax_logg, self._ax_feh, self._ax_av,
+                teff, logg, feh, av, n,
+            )
+            offset = mbol + 5.0 * math.log10(distance_pc / 10.0)
+            return {band_names[i]: offset - float(vals[i]) for i in range(n)}
+        # General path (scipy fallback or band subset)
         abs_mags = self.get_absolute_mag(mbol, teff, logg, feh, av, bands)
-        dm = 5.0 * np.log10(distance_pc / 10.0)
+        dm = 5.0 * math.log10(distance_pc / 10.0)
         return {band: m + dm for band, m in abs_mags.items()}
