@@ -20,7 +20,8 @@ def fit(starname, ra=None, dec=None, gaia_id=None,
     gaia_id : int, optional
         Gaia DR3 source_id. Bypasses cone search for high-PM stars.
     grids : list of str, optional
-        Grid names. Default: ["mist", "parsec", "dartmouth", "basti", "yapsi"].
+        Grid names. Default: ["mist", "parsec", "dartmouth", "basti", "yapsi",
+        "geneva"].
     bma : bool
         Use Bayesian Model Averaging (default True).
     nlive : int

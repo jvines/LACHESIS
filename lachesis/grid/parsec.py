@@ -4,13 +4,27 @@ Translates PARSEC phase labels to MIST-compatible EEP numbers so both
 grids share the same (feh, age, eep) → observables parameterization.
 
 PARSEC label → EEP mapping:
-  0 (PMS)   → EEP   1–201    (linearly interpolated within phase)
+  0 (PMS)   → EEP   1–201
   1 (MS)    → EEP 202–454
   2 (SGB)   → EEP 454–500
   3 (RGB)   → EEP 500–605
   4 (CHeB)  → EEP 631–707
   5 (E-AGB) → EEP 707–808
   6 (TP-AGB)→ EEP 808–1200
+
+PRODUCTION CUBE. The shipped cube (parsec_v1.2S_eeprebuild.h5, loaded via
+``from_hdf5``) is built by ``scripts/rebuild_parsec_eep.py`` with a HOMOLOGOUS
+track-anchored EEP axis: PMS/MS EEPs come from reconstructed fixed-mass tracks
+(Dotter metric distance), post-MS EEPs from per-isochrone metric distance along
+the near-vertical giant branch. That removes the non-homologous mass-rank EEP
+that fabricated young-massive solutions (DEBcat spec-only bias), so no PMS mask
+is needed on load.
+
+LEGACY BUILDER. ``__init__`` + ``_assign_eep`` below build a cube from a
+directory of per-isochrone CSVs using per-phase linspace over mass-rank. That
+axis is NON-homologous and is retained only for the from-CSV API and the unit
+tests; it NaN-masks the PMS as a safety band-aid. Do not use it to regenerate
+the production cube — use the rebuild script.
 """
 
 from pathlib import Path
@@ -198,6 +212,22 @@ class PARSECModelGrid:
         self._data[:, :, :, ci["dm_deep"]] = compute_dm_deep(
             self._data[:, :, :, ci["initial_mass"]], eep_axis=2
         )
+
+        # Mask pre-main-sequence (phase 0) nodes. PARSEC's regridded EEP axis
+        # is non-homologous: a given EEP maps to PMS at young ages but to the
+        # MS at old ages, so the trilinear interpolator blends high-mass PMS
+        # corners into the MS locus and fabricates a spurious young-massive
+        # solution that passes through a star's pinned (Teff, log g, [Fe/H]).
+        # This drove the DEBcat spec-only mass bias (PARSEC +6.6% on the MS,
+        # +54% at sub-solar [Fe/H]) and contaminates the photometric fits too.
+        # NaN-ing the PMS rows (done last, after gap-filling, so they are not
+        # bridged) makes any interpolation cell that touches the PMS region
+        # return NaN, which the likelihood rejects — removing the fabricated
+        # branch without affecting clean MS / evolved cells, which never touch
+        # a PMS node. LACHESIS targets field stars, not pre-MS objects, and the
+        # other grids retain PMS coverage if ever needed.
+        phase = self._data[:, :, :, ci["phase"]]
+        self._data[np.isfinite(phase) & (phase < 0.5)] = np.nan
 
     @property
     def name(self) -> str:

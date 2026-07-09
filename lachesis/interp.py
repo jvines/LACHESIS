@@ -1,8 +1,14 @@
 """Grid interpolation over isochrone grids (3D or 4D with rotation)."""
 
 
+import math
+
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
+
+from lachesis.grid.derived import compute_density, M_SUN, R_SUN
+
+_DENSITY_K = M_SUN / (4.0 / 3.0 * math.pi * R_SUN ** 3)
 
 
 def _recompute_linear_from_logs(result):
@@ -31,19 +37,21 @@ def _recompute_linear_from_logs(result):
         return result
     logR = result["log_R"]
     is_scalar = np.isscalar(logR) or (hasattr(logR, "ndim") and logR.ndim == 0)
-    radius = 10.0 ** float(logR) if is_scalar else 10.0 ** np.asarray(logR)
+    if is_scalar:
+        # Pure-Python scalar path (the nested-sampling inner loop): avoids
+        # np.asarray / compute_density array machinery on every call.
+        radius = 10.0 ** float(logR)
+        result["radius"] = radius
+        if "initial_mass" in result and "density" in result:
+            mass = float(result["initial_mass"])
+            result["density"] = _DENSITY_K * mass / (radius ** 3) if radius > 0 else float("nan")
+        return result
+    radius = 10.0 ** np.asarray(logR)
     result["radius"] = radius
     if "initial_mass" in result and "density" in result:
-        from lachesis.grid.derived import compute_density
-        mass = result["initial_mass"]
-        if is_scalar:
-            result["density"] = float(
-                compute_density(np.asarray(mass), np.asarray(radius))
-            )
-        else:
-            result["density"] = compute_density(
-                np.asarray(mass), np.asarray(radius)
-            )
+        result["density"] = compute_density(
+            np.asarray(result["initial_mass"]), np.asarray(radius)
+        )
     return result
 
 

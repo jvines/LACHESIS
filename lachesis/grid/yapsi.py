@@ -17,7 +17,15 @@ HDU layout:
   CAMAX — (n_comp, n_mass, 4) max age info
 
 Isochrones are constructed by interpolating each track at target ages.
-YAPSI has no EEPs — we use mass-sorted row index as EEP (0, 1, 2, ...).
+
+LEGACY CONSTRUCTION. This class's directory-based build uses the mass-sorted
+row index as a stand-in for EEP (0, 1, 2, ...), which is NOT evolutionarily
+aligned: at fixed index the physical state drifts with age/[Fe/H], so the 4-D
+interpolation blends a main-sequence star with a subgiant and cannot reach the
+old subgiant solution. The production ``yapsi.h5`` instead has real
+central-hydrogen-anchored EEPs on the Dotter scale, built from these same tracks
+by ``scripts/rebuild_yapsi_eep.py``. This directory builder is retained only for
+reference and is not what ships.
 Grid shape: (n_feh, n_age, n_eep, n_cols).
 """
 

@@ -133,6 +133,7 @@ class IsochronePrior:
         distance_prior: tuple[str, ...] | None = None,
         av_range: tuple[float, float] | None = None,
         vini_range: tuple[float, float] | None = None,
+        jitter_range: tuple[float, float] | None = None,
         binary: bool = False,
         imf: str = "chabrier",
     ):
@@ -177,6 +178,14 @@ class IsochronePrior:
             self.av_lo, self.av_hi = av_range
         if self._has_vini:
             self.vini_lo, self.vini_hi = vini_range
+        # Photometric excess-noise (jitter) term, in magnitudes, added in
+        # quadrature to every photometric band's uncertainty. Sampled in
+        # log-uniform (Jeffreys) space so the floor is effectively "off".
+        self._has_jitter = jitter_range is not None
+        if self._has_jitter:
+            self.jit_lo, self.jit_hi = jitter_range
+            self._log_jit_lo = float(np.log10(self.jit_lo))
+            self._log_jit_hi = float(np.log10(self.jit_hi))
 
     def _build_feh_kde(self, samples):
         """Build KDE + inverse CDF for sampling from an arbitrary distribution."""
@@ -228,6 +237,8 @@ class IsochronePrior:
             names.append("Av")
         if self._has_vini:
             names.append("vini")
+        if self._has_jitter:
+            names.append("jitter")
         return names
 
     @property
@@ -277,6 +288,12 @@ class IsochronePrior:
             idx += 1
         if self._has_vini:
             theta[idx] = self.vini_lo + u[idx] * (self.vini_hi - self.vini_lo)
+            idx += 1
+        if self._has_jitter:
+            # Log-uniform photometric excess-noise term (mag).
+            theta[idx] = 10.0 ** (
+                self._log_jit_lo + u[idx] * (self._log_jit_hi - self._log_jit_lo)
+            )
 
         return theta
 
@@ -285,7 +302,7 @@ class IsochronePrior:
         initial_mass: float | None,
         dm_deep: float | None,
     ) -> float:
-        """Log of IMF(mass) * |dm/dEEP| — the EEP prior weight.
+        """Log of IMF(mass) * |dm/dEEP|, the EEP prior weight.
 
         This is separated out because it's folded into the loglikelihood
         (dynesty's prior_transform can't encode grid-dependent priors).

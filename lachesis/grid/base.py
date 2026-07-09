@@ -137,6 +137,26 @@ def _refresh_dm_deep_inplace(data, columns, eep_axis):
     data[..., dm_idx] = compute_dm_deep(data[..., m_idx], eep_axis=eep_axis)
 
 
+def _assert_axes_monotonic(path, **axes):
+    """Raise if any grid axis is not strictly increasing.
+
+    The numba interpolator uses searchsorted on the [Fe/H]/age/EEP axes and
+    silently returns wrong brackets on an unsorted axis (scipy's
+    RegularGridInterpolator raises, but the numba fast path does not). Fail loud
+    at load time so a mis-built grid cannot quietly corrupt results.
+    """
+    from pathlib import Path
+    for name, ax in axes.items():
+        a = np.asarray(ax)
+        if a.size > 1 and not np.all(np.diff(a) > 0):
+            raise ValueError(
+                f"{Path(path).name}: '{name}_values' axis is not strictly "
+                f"increasing (e.g. {np.round(a[:4], 3).tolist()}...); rebuild "
+                f"the grid with a sorted axis — the interpolator corrupts on "
+                f"unsorted axes."
+            )
+
+
 def load_grid_hdf5(path):
     """Load a grid HDF5 file, handling both dense and sparse_v1 formats.
 
@@ -160,6 +180,7 @@ def load_grid_hdf5(path):
         else:
             data = f["data"][:]
 
+    _assert_axes_monotonic(path, feh=feh_values, age=age_values, eep=eep_values)
     # Layout (n_feh, n_age, n_eep, n_cols) -> EEP axis = 2
     _refresh_dm_deep_inplace(data, columns, eep_axis=2)
     return data, feh_values, age_values, eep_values, columns
@@ -183,6 +204,8 @@ def load_grid_hdf5_starevol(path):
         else:
             data = f["data"][:]
 
+    _assert_axes_monotonic(path, feh=feh_values, vini=vini_values,
+                           age=age_values, eep=eep_values)
     # Layout (n_feh, n_vini, n_age, n_eep, n_cols) -> EEP axis = 3
     _refresh_dm_deep_inplace(data, columns, eep_axis=3)
     return data, feh_values, vini_values, age_values, eep_values, columns

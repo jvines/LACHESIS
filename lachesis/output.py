@@ -100,6 +100,8 @@ def to_inference_data(
     const = {"grid_name": np.array([grid_name])}
     if bma_result is not None:
         const["log_evidence"] = bma_result.log_evidences
+        if getattr(bma_result, "log_evidence_errors", None) is not None:
+            const["log_evidence_err"] = bma_result.log_evidence_errors
         const["model_weights"] = bma_result.weights
         const["model_names"] = np.array(bma_result.model_names)
     else:
@@ -203,13 +205,21 @@ def save_summary_dat(path: str, result: dict, param_names: list[str] | None = No
 
 
 def save_model_weights(path: str, bma_result):
-    """Save model weights table."""
+    """Save model weights table.
+
+    The log_evidence_err column is appended last so readers keyed on the
+    original (grid, log_evidence, weight) columns keep working.
+    """
+    errs = getattr(bma_result, "log_evidence_errors", None)
+    if errs is None:
+        errs = np.full(len(bma_result.model_names), np.nan)
     with open(path, "w") as f:
-        f.write("#Grid\tlog_evidence\tweight\n")
-        for name, lz, w in zip(
-            bma_result.model_names, bma_result.log_evidences, bma_result.weights
+        f.write("#Grid\tlog_evidence\tweight\tlog_evidence_err\n")
+        for name, lz, w, lz_err in zip(
+            bma_result.model_names, bma_result.log_evidences,
+            bma_result.weights, errs
         ):
-            f.write(f"{name}\t{lz:.4f}\t{w:.4f}\n")
+            f.write(f"{name}\t{lz:.4f}\t{w:.4f}\t{lz_err:.4f}\n")
 
 
 def _write_param(f, name, arr):

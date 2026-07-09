@@ -26,6 +26,7 @@ class BMAResult:
     model_names: list[str]       # names of each model
     log_evidences: np.ndarray    # (n_models,) log-evidence per model
     log_evidence: float = 0.0    # combined BMA log-evidence: logsumexp(log_z) - log(K)
+    log_evidence_errors: np.ndarray | None = None  # (n_models,) per-grid nested-sampling log-evidence uncertainty
     # Optional per-grid raw nested-sampling posteriors, keyed by model name.
     # These are the unweighted per-grid outputs — used by the plotter for
     # per-model histograms, HR tracks, etc. `samples`/`derived` above are
@@ -60,6 +61,9 @@ def bayesian_model_average(
 
     # Evidence weights
     log_z = np.array([r["logz"] for r in results])
+    # Per-grid nested-sampling uncertainty on each log-evidence (persisted so the
+    # weights carry their evidence error; NaN if a result predates it).
+    log_z_err = np.array([r.get("logzerr", np.nan) for r in results])
     # Normalize in log-space for numerical stability
     log_z_max = log_z.max()
     weights = np.exp(log_z - log_z_max)
@@ -139,6 +143,7 @@ def bayesian_model_average(
         derived=combined_derived,
         model_names=names,
         log_evidences=log_z,
+        log_evidence_errors=log_z_err,
         log_evidence=log_evidence,
         per_grid_samples=per_grid_samples,
         per_grid_derived=per_grid_derived,
