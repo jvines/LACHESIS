@@ -83,6 +83,12 @@ def to_inference_data(
                 # serialises this as a string variable.
                 posterior["model"] = np.array(vals, dtype="U").reshape(1, -1)
             continue
+        if key == "age":
+            # `derived['age']` is log10(age); the Gyr-valued `age` is already set
+            # from log_age in _samples_to_param_dict. Don't overwrite it with the
+            # log-valued derived array (that shipped a log_age `age` var in the
+            # .nc while the .dat Age(Gyr) was correct).
+            continue
         if isinstance(vals, np.ndarray) and len(vals) == n:
             posterior[_rename_key(key)] = vals.reshape(1, -1)
 

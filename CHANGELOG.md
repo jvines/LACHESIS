@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.2] - 2026-07-10
+
+### Fixed
+- The `.nc` posterior `age` variable stored log10(age) instead of age in Gyr:
+  the derived-quantities loop in `to_inference_data` overwrote the correct Gyr
+  conversion with the grid's log-valued `derived['age']`. Affected single-grid
+  and BMA netCDF outputs (the `.dat` `Age(Gyr)` column was already correct).
+  Downstream consumers reading `posterior['age']` from the `.nc` now get Gyr.
+
 ## [1.0.1] - 2026-07-09
 
 ### Fixed
