@@ -77,7 +77,7 @@ def _grid_min_logg(grid) -> float | None:
 
 _GRID_REGISTRY = {
     "mist": ("lachesis.grid.mist", "MISTModelGrid", "mist_v1.2_vvcrit0.4.h5"),
-    "parsec": ("lachesis.grid.parsec", "PARSECModelGrid", "parsec_v1.2S.h5"),
+    "parsec": ("lachesis.grid.parsec", "PARSECModelGrid", "parsec_v1.2S_eeprebuild.h5"),
     "dartmouth": ("lachesis.grid.dartmouth", "DartmouthModelGrid", "dartmouth_dsep.h5"),
     "basti": ("lachesis.grid.basti", "BaSTIModelGrid", "basti.h5"),
     # yapsi.h5 has real central-H-anchored EEPs on the Dotter scale, built from

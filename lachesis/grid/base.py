@@ -137,6 +137,35 @@ def _refresh_dm_deep_inplace(data, columns, eep_axis):
     data[..., dm_idx] = compute_dm_deep(data[..., m_idx], eep_axis=eep_axis)
 
 
+def _sort_axes_inplace(path, data, axes):
+    """Sort any unsorted-but-duplicate-free axes, permuting `data` along the
+    matching dimension. Shipped grids occasionally carry a descending axis
+    (e.g. the PARSEC eeprebuild [Fe/H] axis in lachesis-grids 0.0.3); a pure
+    permutation is identity-preserving for interpolation, so fix it at load
+    time instead of failing. Genuinely broken axes (duplicates/NaN) still
+    fall through to _assert_axes_monotonic.
+
+    `axes` is a list of (name, values, dim); returns the (possibly reordered)
+    axis arrays in input order alongside the permuted data.
+    """
+    import warnings
+    from pathlib import Path
+
+    out = []
+    for name, ax, dim in axes:
+        a = np.asarray(ax)
+        if a.size > 1 and not np.all(np.diff(a) > 0) and np.unique(a).size == a.size:
+            order = np.argsort(a)
+            a = a[order]
+            data = np.take(data, order, axis=dim)
+            warnings.warn(
+                f"{Path(path).name}: sorted the '{name}_values' axis at load "
+                f"(shipped unsorted); consider rebuilding the grid."
+            )
+        out.append(a)
+    return data, out
+
+
 def _assert_axes_monotonic(path, **axes):
     """Raise if any grid axis is not strictly increasing.
 
@@ -180,6 +209,9 @@ def load_grid_hdf5(path):
         else:
             data = f["data"][:]
 
+    data, (feh_values, age_values, eep_values) = _sort_axes_inplace(
+        path, data, [("feh", feh_values, 0), ("age", age_values, 1),
+                     ("eep", eep_values, 2)])
     _assert_axes_monotonic(path, feh=feh_values, age=age_values, eep=eep_values)
     # Layout (n_feh, n_age, n_eep, n_cols) -> EEP axis = 2
     _refresh_dm_deep_inplace(data, columns, eep_axis=2)
@@ -204,6 +236,9 @@ def load_grid_hdf5_starevol(path):
         else:
             data = f["data"][:]
 
+    data, (feh_values, vini_values, age_values, eep_values) = _sort_axes_inplace(
+        path, data, [("feh", feh_values, 0), ("vini", vini_values, 1),
+                     ("age", age_values, 2), ("eep", eep_values, 3)])
     _assert_axes_monotonic(path, feh=feh_values, vini=vini_values,
                            age=age_values, eep=eep_values)
     # Layout (n_feh, n_vini, n_age, n_eep, n_cols) -> EEP axis = 3
