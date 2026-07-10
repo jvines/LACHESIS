@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.1] - 2026-07-09
+
+### Fixed
+- PARSEC grid registry pointed at `parsec_v1.2S.h5`, but lachesis-grids 0.0.3
+  ships the EEP-rebuilt cube as `parsec_v1.2S_eeprebuild.h5`, so any fit
+  including PARSEC crashed with `GridError` at `initialize()`. Broken in 1.0.0.
+- Sort unsorted grid axes at load, permuting the cube (fixes the PARSEC
+  `feh_values` ordering shipped in lachesis-grids 0.0.3).
+- `__version__` now reports the correct version (was `0.0.10` at the 1.0.0 tag).
+
 ## [1.0.0] - 2026-07-09
 
 First public release, accompanying the LACHESIS paper (Vines et al., submitted
