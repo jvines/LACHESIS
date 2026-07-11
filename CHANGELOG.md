@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.4] - 2026-07-11
+
+### Changed
+- Removed the inner per-likelihood `ThreadPool` (previously built when
+  `setup['threads'] > 1`). dynesty calls a GIL-holding Python likelihood closure
+  around a ~20 us njit kernel, so the pool added per-proposal dispatch overhead
+  with no real parallelism, making fits ~1.4x slower and worse the more
+  photometric bands (likelihood calls) there are. Per-grid fits now run
+  single-threaded; BMA parallelism comes from the grid-level process pool
+  (`n_grid_jobs`). A 16-dim per-band fit drops from ~6.5 s to ~4.8 s.
+
 ## [1.0.3] - 2026-07-11
 
 ### Changed

@@ -684,18 +684,20 @@ class Fitter:
 
     @staticmethod
     def _build_pool(setup: dict):
-        """Build a thread pool when setup['threads'] > 1.
+        """No inner likelihood pool: the per-grid fit runs single-threaded.
 
-        Returns ``(pool, threads)``. Uses ``multiprocessing.pool.ThreadPool``
-        rather than ``Pool`` so the closures in ``IsochroneFitter.fit`` don't
-        have to be picklable. The numba-JIT'd interpolation releases the GIL
-        on the hot path so threading yields real parallelism.
+        A ``ThreadPool`` over the likelihood was measured to be pure OVERHEAD,
+        not parallelism. dynesty calls a Python ``loglike`` closure (which holds
+        the GIL for theta unpacking + dispatch) wrapping a fast (~20 us) njit
+        kernel, so the pool's per-proposal dispatch cost dominates and makes the
+        fit ~1.6x SLOWER — and worse the more likelihood calls there are, i.e.
+        the more dimensions/photometric bands. (Marking the kernel ``nogil`` did
+        not help: the GIL-free window is too small next to the wrapper + queue
+        overhead.) BMA parallelism comes from the grid-level PROCESS pool
+        (``n_grid_jobs``) instead; ``setup['threads']`` is kept for API
+        compatibility but no longer builds an inner pool.
         """
-        threads = int(setup.get("threads") or 1)
-        if threads <= 1:
-            return None, 1
-        from multiprocessing.pool import ThreadPool
-        return ThreadPool(threads), threads
+        return None, 1
 
     @staticmethod
     def _pool_kwargs(pool, threads: int) -> dict:
