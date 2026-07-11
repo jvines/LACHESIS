@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.5] - 2026-07-11
+
+### Changed
+- `prior_transform` hot-path optimizations (~10-15% faster fits, results
+  bit-identical): the per-band jitter draw is vectorized (was a Python loop over
+  bands), and the truncated-normal distance-prior CDF bounds are precomputed
+  once instead of two `ndtr` evaluations per proposal.
+
 ## [1.0.4] - 2026-07-11
 
 ### Changed

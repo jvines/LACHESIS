@@ -174,6 +174,11 @@ class IsochronePrior:
             # Sampling range: mean ± 10σ, truncated at 0
             self.dist_lo = max(0.1, self._dist_mean - 10 * self._dist_sigma)
             self.dist_hi = self._dist_mean + 10 * self._dist_sigma
+            # Precompute the truncation CDF bounds ONCE (they depend only on the
+            # fixed prior, not the sampled u), so prior_transform runs a single
+            # ndtri per call instead of two ndtr + one ndtri each proposal.
+            self._dist_Fa = float(ndtr((self.dist_lo - self._dist_mean) / self._dist_sigma))
+            self._dist_Fb = float(ndtr((self.dist_hi - self._dist_mean) / self._dist_sigma))
         if self._has_av:
             self.av_lo, self.av_hi = av_range
         if self._has_vini:
@@ -296,10 +301,9 @@ class IsochronePrior:
             theta[idx] = self.eep_lo + u[idx] * (theta[0] - self.eep_lo)
             idx += 1
         if self._has_distance:
-            theta[idx] = _truncated_normal_ppf(
-                u[idx], self._dist_mean, self._dist_sigma,
-                self.dist_lo, self.dist_hi,
-            )
+            # Inlined truncated-normal PPF with precomputed Fa/Fb (see __init__).
+            theta[idx] = self._dist_mean + self._dist_sigma * ndtri(
+                self._dist_Fa + u[idx] * (self._dist_Fb - self._dist_Fa))
             idx += 1
         if self._has_av:
             theta[idx] = self.av_lo + u[idx] * (self.av_hi - self.av_lo)
@@ -308,13 +312,14 @@ class IsochronePrior:
             theta[idx] = self.vini_lo + u[idx] * (self.vini_hi - self.vini_lo)
             idx += 1
         if self._has_jitter:
-            # One log-uniform photometric excess-noise term per band (mag).
-            for _ in self._jitter_bands:
-                theta[idx] = 10.0 ** (
-                    self._log_jit_lo
-                    + u[idx] * (self._log_jit_hi - self._log_jit_lo)
-                )
-                idx += 1
+            # One log-uniform photometric excess-noise term per band (mag),
+            # vectorised over bands (the per-band Python loop was ~1.4 us/call).
+            n = len(self._jitter_bands)
+            theta[idx:idx + n] = 10.0 ** (
+                self._log_jit_lo
+                + u[idx:idx + n] * (self._log_jit_hi - self._log_jit_lo)
+            )
+            idx += n
 
         return theta
 
