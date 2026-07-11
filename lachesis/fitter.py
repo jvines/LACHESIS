@@ -641,8 +641,9 @@ class Fitter:
                 print(colored(f"{t3}{'eep_2nd':12s}  U({p.eep_lo:.0f}, eep_primary)", c))
             elif name == "vini":
                 print(colored(f"{t3}{'vini':12s}  U({p.vini_lo:.2f}, {p.vini_hi:.2f})", c))
-            elif name == "jitter":
-                print(colored(f"{t3}{'jitter':12s}  log-U({p.jit_lo:.3f}, {p.jit_hi:.2f}) mag", c))
+            elif name.endswith("_noise"):
+                lbl = name[:-len("_noise")]
+                print(colored(f"{t3}{lbl:12s}  log-U({p.jit_lo:.3f}, {p.jit_hi:.2f}) mag", c))
         print()
 
     def fit(self):

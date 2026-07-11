@@ -123,7 +123,8 @@ class ISOPlotter:
                 if var == "model":
                     model_arr = ds[var].values.flatten()
                     continue
-                if var not in _SKIP_DERIVED and var != "eep_secondary" and var != "vini":
+                if (var not in _SKIP_DERIVED and var != "eep_secondary"
+                        and var != "vini" and not var.endswith("_noise")):
                     derived[var] = ds[var].values.flatten()
             if "age" in ds:
                 derived["age_gyr"] = ds["age"].values.flatten()

@@ -181,11 +181,28 @@ class IsochronePrior:
         # Photometric excess-noise (jitter) term, in magnitudes, added in
         # quadrature to every photometric band's uncertainty. Sampled in
         # log-uniform (Jeffreys) space so the floor is effectively "off".
-        self._has_jitter = jitter_range is not None
-        if self._has_jitter:
+        # ONE excess-noise term PER photometric band (ARIADNE-style): the
+        # parameter vector carries n_band jitter terms, each added in quadrature
+        # to its own band. The ordered band list is supplied by the sampler once
+        # the observed photometry is known, via ``set_jitter_bands``.
+        self._fit_jitter = jitter_range is not None
+        self._jitter_bands: list[str] = []
+        self._has_jitter = False
+        if self._fit_jitter:
             self.jit_lo, self.jit_hi = jitter_range
             self._log_jit_lo = float(np.log10(self.jit_lo))
             self._log_jit_hi = float(np.log10(self.jit_hi))
+
+    def set_jitter_bands(self, bands) -> None:
+        """Configure one jitter term per photometric band (ARIADNE-style).
+
+        ``bands`` must be in the SAME order the likelihood consumes photometry
+        (observed-dict order), so the trailing ``jitter_<band>`` entries in
+        ``param_names`` align positionally with the per-band variance in the
+        kernel. A no-op when jitter fitting is disabled.
+        """
+        self._jitter_bands = list(bands) if self._fit_jitter else []
+        self._has_jitter = len(self._jitter_bands) > 0
 
     def _build_feh_kde(self, samples):
         """Build KDE + inverse CDF for sampling from an arbitrary distribution."""
@@ -237,8 +254,9 @@ class IsochronePrior:
             names.append("Av")
         if self._has_vini:
             names.append("vini")
-        if self._has_jitter:
-            names.append("jitter")
+        # ARIADNE-style per-band white-noise naming: "<band>_noise".
+        for b in self._jitter_bands:
+            names.append(f"{b}_noise")
         return names
 
     @property
@@ -290,10 +308,13 @@ class IsochronePrior:
             theta[idx] = self.vini_lo + u[idx] * (self.vini_hi - self.vini_lo)
             idx += 1
         if self._has_jitter:
-            # Log-uniform photometric excess-noise term (mag).
-            theta[idx] = 10.0 ** (
-                self._log_jit_lo + u[idx] * (self._log_jit_hi - self._log_jit_lo)
-            )
+            # One log-uniform photometric excess-noise term per band (mag).
+            for _ in self._jitter_bands:
+                theta[idx] = 10.0 ** (
+                    self._log_jit_lo
+                    + u[idx] * (self._log_jit_hi - self._log_jit_lo)
+                )
+                idx += 1
 
         return theta
 

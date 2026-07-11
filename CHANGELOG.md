@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.3] - 2026-07-11
+
+### Changed
+- Photometric excess noise is now fit as ONE white-noise term PER photometric
+  band (ARIADNE-style), replacing the single global jitter. Each band's variance
+  is inflated independently: `sigma_eff[k]^2 = sigma_cat[k]^2 + noise[k]^2`,
+  with an independent log-uniform prior per band. The parameter vector is now
+  `5 + n_bands` and the terms are named `<band>_noise` (e.g. `2MASS_J_noise`) to
+  match ARIADNE's output convention.
+
 ## [1.0.2] - 2026-07-10
 
 ### Fixed

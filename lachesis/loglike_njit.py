@@ -97,15 +97,16 @@ def loglike_kernel(
             teff, logg, feh, av, n_bands,
         )
         offset = mbol + 5.0 * np.log10(distance / 10.0)
-        # Photometric excess noise: sigma_eff^2 = sigma_cat^2 + jitter^2. The
-        # log-sigma normalisation is now per-band (it depends on the sampled
-        # jitter), so it cannot be precomputed into a constant any more.
-        jit2 = jitter * jitter
+        # Photometric excess noise, ONE jitter term PER band:
+        # sigma_eff[k]^2 = sigma_cat[k]^2 + jitter[k]^2. `jitter` is the
+        # per-band array aligned with phot_idx; the log-sigma normalisation is
+        # per-band (depends on the sampled jitter) so cannot be precomputed.
         for k in range(phot_idx.shape[0]):
             m = offset - bcvals[phot_idx[k]]
             if np.isnan(m):
                 return -np.inf
-            sig2 = phot_sig[k] * phot_sig[k] + jit2
+            jk = jitter[k]
+            sig2 = phot_sig[k] * phot_sig[k] + jk * jk
             d = phot_obs[k] - m
             lnl += -0.5 * d * d / sig2 - 0.5 * np.log(sig2)
 

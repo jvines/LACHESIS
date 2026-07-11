@@ -68,15 +68,16 @@ def build_likelihood_plan(interp, observed, uncertainties, bc_table=None):
 
 
 def eval_likelihood_plan(plan, has_phot, const, predicted, feh,
-                          bc_table=None, distance=None, av=None, jitter=0.0):
+                          bc_table=None, distance=None, av=None, jitter=None):
     """Evaluate the Gaussian log-likelihood from a precomputed plan.
 
     ``predicted`` must already be the grid interpolation at the sampled
     (eep, log_age, feh). Math matches the original per-key accumulation.
 
-    ``jitter`` (mag) is the photometric excess-noise term, added in quadrature
-    to every photometric band's catalogue uncertainty. ``0.0`` recovers the
-    original fixed-error likelihood exactly.
+    ``jitter`` is the per-band photometric excess-noise array (mag), one term
+    per photometric band added in quadrature to that band's catalogue
+    uncertainty, ordered to match the photometric entries of ``plan`` (i.e.
+    observed-dict order). ``None`` recovers the fixed-error likelihood exactly.
     """
     pred_mags = None
     if has_phot:
@@ -95,8 +96,8 @@ def eval_likelihood_plan(plan, has_phot, const, predicted, feh,
             av=av if av is not None else 0.0, distance_pc=distance,
         )
 
-    jit2 = jitter * jitter
     lnl = const
+    phot_k = 0
     for key, obs, sigma, log_sigma, kind in plan:
         if kind == _KIND_GRID:
             pred = predicted.get(key, np.nan)
@@ -106,9 +107,11 @@ def eval_likelihood_plan(plan, has_phot, const, predicted, feh,
             pred = pred_mags.get(key, np.nan)
         if pred != pred:  # NaN, without np.isnan overhead
             return -np.inf
-        if kind == _KIND_PHOT and jit2 > 0.0:
-            # sigma_eff^2 = sigma_cat^2 + jitter^2; log-sigma is now per-band.
-            sig2 = sigma * sigma + jit2
+        if kind == _KIND_PHOT and jitter is not None:
+            # ONE jitter term per band: sigma_eff^2 = sigma_cat^2 + jitter[k]^2.
+            jk = jitter[phot_k]
+            phot_k += 1
+            sig2 = sigma * sigma + jk * jk
             d = obs - pred
             lnl += -0.5 * d * d / sig2 - 0.5 * math.log(sig2)
         else:

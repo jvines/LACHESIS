@@ -143,9 +143,11 @@ def display_summary(samples, derived, param_names):
     if "Av" in param_names:
         idx = param_names.index("Av")
         display_params.append(("Av (mag)", samples[:, idx]))
-    if "jitter" in param_names:
-        idx = param_names.index("jitter")
-        display_params.append(("Jitter (mag)", samples[:, idx]))
+    for name in param_names:
+        if name.endswith("_noise"):
+            idx = param_names.index(name)
+            band = name[:-len("_noise")]
+            display_params.append((f"Noise {band} (mag)", samples[:, idx]))
 
     fmt = f"{_T3}{{:20s}}  {{:>10s}}  {{:>20s}}  {{:>20s}}"
     print(colored(fmt.format("Parameter", "Median", "1\u03c3 CI", "3\u03c3 CI"), c))

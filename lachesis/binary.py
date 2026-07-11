@@ -83,7 +83,7 @@ def binary_log_likelihood(
     av: float | None,
     observed: dict[str, float],
     uncertainties: dict[str, float],
-    jitter: float = 0.0,
+    jitter=None,
 ) -> float:
     """Log-likelihood for a binary system.
 
@@ -129,8 +129,8 @@ def binary_log_likelihood(
         # Photometric observables present but no BC table — refuse the model.
         return -np.inf
 
-    jit2 = jitter * jitter
     lnl = 0.0
+    phot_k = 0
     for key in observed:
         obs_val = observed[key]
         sigma = uncertainties[key]
@@ -145,9 +145,11 @@ def binary_log_likelihood(
         if not np.isfinite(pred):
             return -np.inf
 
-        if key in phot_bands and jit2 > 0.0:
-            # Photometric excess noise added in quadrature (combined-flux band).
-            sig2 = sigma * sigma + jit2
+        if key in phot_bands:
+            # ONE jitter term per band, added in quadrature (combined-flux band).
+            jk = jitter[phot_k] if jitter is not None else 0.0
+            phot_k += 1
+            sig2 = sigma * sigma + jk * jk
             lnl += -0.5 * (obs_val - pred) ** 2 / sig2 - 0.5 * np.log(sig2)
         else:
             lnl += -0.5 * ((obs_val - pred) / sigma) ** 2 - np.log(sigma)

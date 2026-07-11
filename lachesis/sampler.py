@@ -82,6 +82,13 @@ class IsochroneFitter:
         obs = observed
         unc = uncertainties
         is_binary = self._binary
+        # ONE jitter term per photometric band (ARIADNE-style). The ordered
+        # photometric bands (observed-dict order == the order the plan, the njit
+        # phot arrays, and the binary loop consume them) are registered on the
+        # prior so param_names carries one jitter_<band> per band.
+        _phot_bands = ([k for k in obs if k in set(bc.bands)]
+                       if bc is not None else [])
+        prior.set_jitter_bands(_phot_bands)
         param_names = prior.param_names
         ext_kdes = self._external_kdes
 
@@ -111,7 +118,13 @@ class IsochroneFitter:
         i_dist = _pidx.get("distance")
         i_av = _pidx.get("Av")
         i_vini = _pidx.get("vini")
-        i_jitter = _pidx.get("jitter")
+        # Per-band white noise: the trailing "<band>_noise" params (ARIADNE
+        # naming) form a contiguous slice of theta, aligned by band order with
+        # the phot arrays. Off => a length-n_phot zero vector is used instead.
+        _jit_names = [f"{b}_noise" for b in _phot_bands if f"{b}_noise" in _pidx]
+        _jit_start = _pidx[_jit_names[0]] if _jit_names else None
+        _jit_stop = (_jit_start + len(_jit_names)) if _jit_start is not None else None
+        _zero_jit = np.zeros(len(_phot_bands), dtype=np.float64)
         i_eep2 = _pidx.get("eep_secondary")
 
         def loglike(theta):
@@ -121,7 +134,8 @@ class IsochroneFitter:
             distance = theta[i_dist] if i_dist is not None else None
             av = theta[i_av] if i_av is not None else None
             vini = theta[i_vini] if i_vini is not None else None
-            jitter = theta[i_jitter] if i_jitter is not None else 0.0
+            jitter = (theta[_jit_start:_jit_stop] if _jit_start is not None
+                      else _zero_jit)
 
             # Fully-JIT'd fast path (interp + EEP prior + likelihood fused).
             if njit_args is not None:
