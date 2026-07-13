@@ -9,12 +9,12 @@ where column 0 of each HDU gives the direct value at each time step,
 and columns 1-7 are Chebyshev interpolation coefficients.
 
 HDU layout:
-  CAGE  — age (Gyr)
-  CLOGT — log(Teff)
-  CLOGG — log(g)
-  CLOGL — log(L/Lsun)
-  CFEHS — surface [Fe/H]
-  CAMAX — (n_comp, n_mass, 4) max age info
+  CAGE, age (Gyr)
+  CLOGT, log(Teff)
+  CLOGG, log(g)
+  CLOGL, log(L/Lsun)
+  CFEHS, surface [Fe/H]
+  CAMAX, (n_comp, n_mass, 4) max age info
 
 Isochrones are constructed by interpolating each track at target ages.
 

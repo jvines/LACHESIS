@@ -84,12 +84,12 @@ class ISOPlotter:
         For BMA results:
         - The combined BMA-weighted posterior is loaded from the
           ``posterior`` group. This is what `result.samples`/`result.derived`
-          reflect — properly evidence-weighted draws as produced by
+          reflect, properly evidence-weighted draws as produced by
           ``bayesian_model_average``.
         - The per-grid RAW nested-sampling posteriors are loaded from the
           ``posterior_{gname}`` groups and stored on
           ``result.per_grid_samples`` / ``result.per_grid_derived``. These
-          are unweighted — used by the plotter for per-model histograms,
+          are unweighted, used by the plotter for per-model histograms,
           HR tracks, etc.
 
         Returns
@@ -175,7 +175,7 @@ class ISOPlotter:
             per_grid_samples[name] = s
             per_grid_derived[name] = d
 
-        # The combined `posterior` group is the source of truth — it carries
+        # The combined `posterior` group is the source of truth, it carries
         # the BMA-weighted draws and per-sample `model` labels exactly as
         # `bayesian_model_average` produced them. Don't resample here.
         log_evidence = float(getattr(idata, "attrs", {}).get(
@@ -293,7 +293,7 @@ class ISOPlotter:
                 setattr(self, k, v)
 
     # ------------------------------------------------------------------
-    # 1.  Corner plot (from scratch — no `corner` package)
+    # 1.  Corner plot (from scratch, no `corner` package)
     # ------------------------------------------------------------------
 
     def plot_corner(self, params=None):
@@ -339,7 +339,7 @@ class ISOPlotter:
                 else:
                     self._corner_2d(ax, data[:, j], data[:, i], model_labels)
 
-                # Axis labels — bottom row and left column only
+                # Axis labels, bottom row and left column only
                 if i == n - 1:
                     ax.set_xlabel(
                         _label_for(params[j]),
@@ -409,7 +409,7 @@ class ISOPlotter:
             and getattr(result, "per_grid_derived", None)
         )
 
-        # Parameters to plot — must exist in the combined posterior
+        # Parameters to plot, must exist in the combined posterior
         params = []
         for p in _DEFAULT_HIST_PARAMS:
             try:
@@ -466,13 +466,13 @@ class ISOPlotter:
                     w = weights_dict.get(name, 0)
                     mlabel = f"{name} prob: {w:.3f}"
 
-                    # PDF panel — each model's own posterior shape
+                    # PDF panel, each model's own posterior shape
                     _kde_on_hist(
                         ax1, samp, color, bins=20, alpha=0.3,
                         label=mlabel,
                     )
 
-                    # Weighted (N) panel — bars scaled by BMA weight
+                    # Weighted (N) panel, bars scaled by BMA weight
                     n_w, bins_w, _ = ax2.hist(
                         samp, bins=20, alpha=0.3, label=mlabel,
                         color=color,
@@ -511,7 +511,7 @@ class ISOPlotter:
                              alpha=1, ls="-.", label="Weighted average")
 
             else:
-                # No per-grid data available — single-grid histogram
+                # No per-grid data available, single-grid histogram
                 _kde_on_hist(ax1, arr_combined, "tab:blue", bins=20, alpha=0.3)
                 _kde_on_hist(ax2, arr_combined, "tab:blue", bins=20, alpha=0.3,
                              density=False)
@@ -638,7 +638,7 @@ class ISOPlotter:
         """Mass vs Age 2D density with contours."""
         result = self.result
         filename = f"{self.out_folder}/mass_age{self._ext}"
-        # Current stellar mass, not ZAMS — matches the rest of the plotter
+        # Current stellar mass, not ZAMS, matches the rest of the plotter
         mass = _extract_param(result, "mass")
         age = _extract_param(result, "age_gyr")
         model_labels = _get_model_labels(result)
@@ -1089,7 +1089,7 @@ class ISOPlotter:
         """Draw gray BMA-weighted posterior tracks + the best-fit track.
 
         The gray tracks are drawn by sampling ``n_samples`` random rows from
-        ``result.samples``, which is already BMA-weighted — so tracks are
+        ``result.samples``, which is already BMA-weighted, so tracks are
         drawn from each grid in proportion to its evidence weight. Each
         sample's model label (``result.derived["model"]``) picks the grid
         to use, and its ``(log_age, feh)`` define where on the isochrone
@@ -1207,7 +1207,7 @@ class ISOPlotter:
             ai = int(np.argmin(np.abs(grid._age_values - log_age)))
 
             # 4D grids: (feh, age, eep, col)
-            # 5D grids (STAREVOL): (feh, vini, age, eep, col) — pick middle vini
+            # 5D grids (STAREVOL): (feh, vini, age, eep, col), pick middle vini
             if grid._data.ndim == 5:
                 vi = grid._data.shape[1] // 2
                 track_data = grid._data[fi, vi, ai, :, :]

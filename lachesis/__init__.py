@@ -1,4 +1,4 @@
-"""LACHESIS — Isochrone fitting with Bayesian Model Averaging."""
+"""LACHESIS, Isochrone fitting with Bayesian Model Averaging."""
 
 __version__ = "1.0.5"
 

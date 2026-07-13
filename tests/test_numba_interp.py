@@ -1,4 +1,4 @@
-"""Tests for numba-JIT trilinear interpolator — TDD."""
+"""Tests for numba-JIT trilinear interpolator, TDD."""
 
 import numpy as np
 import pytest
@@ -57,7 +57,7 @@ class TestNumbaInterpolator:
         from types import SimpleNamespace
         from lachesis.interp_numba import NumbaGridInterpolator
 
-        # Pathological synthetic grid: at fixed EEP, radius spans 0.1–130 R☉
+        # Pathological synthetic grid: at fixed EEP, radius spans 0.1-130 R☉
         # across (feh, age) corners while log_R stays well-behaved.
         feh_values = np.array([-0.25, 0.0])
         age_values = np.array([9.50, 9.55])
@@ -65,13 +65,12 @@ class TestNumbaInterpolator:
         columns = ["initial_mass", "log_Teff", "log_g", "log_L", "log_R",
                    "Teff", "Mbol", "radius", "density"]
         # Cube: 8 corners (feh, age, eep). At each corner pick log_R values
-        # that differ by ~3 dex between adjacent (feh, age) slices —
-        # mimicking PARSEC's regrid pathology.
+        # that differ by ~3 dex between adjacent (feh, age) slices, # mimicking PARSEC's regrid pathology.
         log_R = np.array([
-            [[2.10, 2.13],   # feh=-.25, age=9.50  → R=125, 135
-             [-0.93, -0.93]], # feh=-.25, age=9.55  → R=0.12
-            [[-0.020, -0.018], # feh=0.0,  age=9.50 → R=0.96
-             [-0.049, -0.047]] # feh=0.0,  age=9.55 → R=0.89
+            [[2.10, 2.13],   # feh=-.25, age=9.50 -> R=125, 135
+             [-0.93, -0.93]], # feh=-.25, age=9.55 -> R=0.12
+            [[-0.020, -0.018], # feh=0.0,  age=9.50 -> R=0.96
+             [-0.049, -0.047]] # feh=0.0,  age=9.55 -> R=0.89
         ])
         mass = np.full(log_R.shape, 0.93)
         log_g = np.full(log_R.shape, 4.30)
@@ -94,7 +93,7 @@ class TestNumbaInterpolator:
         interp = NumbaGridInterpolator(grid)
 
         # Query far from the inflated corners: feh=-0.033, mostly weighted
-        # toward feh=0 where log_R ≈ 0 → radius ≈ 1 R☉.
+        # toward feh=0 where log_R ≈ 0 -> radius ≈ 1 R☉.
         out = interp(eep=322.9, log_age=9.528, feh=-0.033)
         log_R_interp = out["log_R"]
         radius_interp = out["radius"]
@@ -104,7 +103,7 @@ class TestNumbaInterpolator:
         assert radius_interp == pytest.approx(10**log_R_interp, rel=1e-6), (
             f"Radius decoupled from log_R after interp: "
             f"radius={radius_interp:.3f}, 10**log_R={10**log_R_interp:.3f}. "
-            f"This is the v0.0.6 PARSEC-cube bug — radius column is being "
+            f"This is the v0.0.6 PARSEC-cube bug, radius column is being "
             f"interpolated linearly through cells with R spanning orders of "
             f"magnitude. Recompute from log_R post-interp."
         )

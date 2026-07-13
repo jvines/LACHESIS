@@ -1,4 +1,4 @@
-"""Console display functions — matching ARIADNE's output style."""
+"""Console display functions, matching ARIADNE's output style."""
 
 import os
 import random

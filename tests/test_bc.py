@@ -1,4 +1,4 @@
-"""Tests for bolometric correction tables — TDD."""
+"""Tests for bolometric correction tables, TDD."""
 
 import numpy as np
 import pytest

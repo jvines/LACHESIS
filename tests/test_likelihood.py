@@ -1,4 +1,4 @@
-"""Tests for log-likelihood — written BEFORE implementation (TDD)."""
+"""Tests for log-likelihood, written BEFORE implementation (TDD)."""
 
 import numpy as np
 import pytest
@@ -104,7 +104,7 @@ class TestLogLikelihood:
             model_interp, eep=350.0, log_age=9.66, feh=0.0,
             observed=observed, uncertainties=uncertainties,
         )
-        # Add feh as observable — should change the likelihood
+        # Add feh as observable, should change the likelihood
         observed2 = {**observed, "feh": 0.0}
         uncertainties2 = {**uncertainties, "feh": 0.1}
         lnl2 = log_likelihood(

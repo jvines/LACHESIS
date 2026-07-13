@@ -1,4 +1,4 @@
-"""Tests for prior transforms and log-prior — written BEFORE implementation."""
+"""Tests for prior transforms and log-prior, written BEFORE implementation."""
 
 import numpy as np
 import pytest
@@ -18,7 +18,7 @@ class TestIsochronePrior:
         assert prior is not None
 
     def test_prior_transform_maps_unit_cube(self):
-        """prior_transform maps [0,1]^3 → physical parameter space."""
+        """prior_transform maps [0,1]^3 -> physical parameter space."""
         prior = IsochronePrior(
             eep_range=(1, 808),
             age_range=(5.0, 10.3),
@@ -36,7 +36,7 @@ class TestIsochronePrior:
         assert hi[2] == pytest.approx(0.5)     # feh max
 
     def test_prior_transform_midpoint(self):
-        """Midpoint of unit cube → midpoint of parameter space."""
+        """Midpoint of unit cube -> midpoint of parameter space."""
         prior = IsochronePrior(
             eep_range=(0, 1000),
             age_range=(5.0, 10.0),

@@ -1,4 +1,4 @@
-"""Tests for nested sampling integration — TDD."""
+"""Tests for nested sampling integration, TDD."""
 
 from pathlib import Path
 

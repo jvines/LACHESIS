@@ -1,4 +1,4 @@
-"""Star class — holds observed stellar properties for isochrone fitting."""
+"""Star class, holds observed stellar properties for isochrone fitting."""
 
 import logging
 
@@ -26,7 +26,7 @@ _AV_BAYESTAR_FACTOR = 2.742 * 0.884  # Bayestar correction (Schlafly+11)
 
 # Gaia DR3 GSP_Phot Teff is bias-calibrated against APOGEE/GALAH but the
 # reported errors (b_Teff/B_Teff) are unrealistically tight for bright
-# stars — sometimes only a few Kelvin. Using them raw pins the fit at a
+# stars, sometimes only a few Kelvin. Using them raw pins the fit at a
 # possibly wrong Teff. We apply a floor based on Andrae+2023's external
 # RMS (~100 K typical, 200 K conservative).
 _GAIA_TEFF_ERR_FLOOR = 100.0
@@ -113,7 +113,7 @@ class Star:
                 import logging
                 logging.getLogger("lachesis").warning(
                     "%s is very bright (mag=%.1f). Survey photometry is likely "
-                    "saturated — fit results may be unreliable.",
+                    "saturated, fit results may be unreliable.",
                     starname, bright_mag,
                 )
 
@@ -205,7 +205,7 @@ class Star:
         #   2. ARIADNE-equivalent blackbody fit
         # All flagged bands accumulate on the Star instance under
         # `_qc_flagged_bands`, `_qc_catalogue_flags`,
-        # `_qc_bb_flagged_bands` — the user decides removal.
+        # `_qc_bb_flagged_bands`, the user decides removal.
         if self.magnitudes:
             self._photometry_check()
             self._photometry_check_blackbody()
@@ -387,7 +387,7 @@ class Star:
                 verbose=verbose,
             )
         else:
-            # No coordinates — spectroscopic-only using ARIADNE params directly
+            # No coordinates, spectroscopic-only using ARIADNE params directly
             star = cls(
                 starname, 0.0, 0.0,
                 magnitudes={},
@@ -402,9 +402,9 @@ class Star:
         star.radius_e = rad_e
 
         # Store posterior samples:
-        # - feh_posterior → sampled parameter, fed through prior transform
+        # - feh_posterior -> sampled parameter, fed through prior transform
         #   as a KDE-based inverse CDF, preserving full distribution shape.
-        # - external_posteriors → KDE penalties in the likelihood for all
+        # - external_posteriors -> KDE penalties in the likelihood for all
         #   other available ARIADNE posteriors (grid-derived and sampled).
         star.feh_posterior = feh_arr  # full samples, not just mean/std
         star.external_posteriors = {}
@@ -448,7 +448,7 @@ class Star:
 
     _GAIA_PREFIXES = ("Gaia_", "GaiaDR")
 
-    # Catalogue → band-name prefix mapping used for catalogue-coherent
+    # Catalogue -> band-name prefix mapping used for catalogue-coherent
     # offset detection. Bands with the same source catalogue should share
     # a single per-source cross-match; a coherent offset of the whole group
     # is a tell-tale sign that catalogue was matched to the wrong sky source.
@@ -521,7 +521,7 @@ class Star:
         bands = np.array(bands)
         mags  = np.array(mags)
         errs  = np.array(errs)
-        lam_m = np.array(lam_um) * 1e-6  # μm → m
+        lam_m = np.array(lam_um) * 1e-6  # μm -> m
 
         # Per-filter Vega/AB zero-point flux density (erg/s/cm²/Å).
         f0 = np.empty(len(bands))
@@ -913,7 +913,7 @@ class Star:
         ax_main.invert_yaxis()
         ax_main.set_ylabel("Magnitude")
         ax_main.set_title(
-            f"{self.starname}  —  $T_{{\\rm fit}}$ = {self._phot_teff:.0f} K"
+            f"{self.starname}, $T_{{\\rm fit}}$ = {self._phot_teff:.0f} K"
         )
         ax_main.legend(
             fontsize=6, ncol=3, loc=0,
@@ -965,7 +965,7 @@ class Star:
         errs  = np.array(errs)
         lam_um = np.array(lam_um)
 
-        # Per-filter zero-point for mag → F_λ conversion
+        # Per-filter zero-point for mag -> F_λ conversion
         f0 = np.array([self._vega_zero_flux(b, lam) for b, lam in zip(bands, lam_um)])
         for i, b in enumerate(bands):
             if any(b.startswith(p) for p in self._AB_FAMILIES):
@@ -976,11 +976,11 @@ class Star:
         lF_l    = F_lam * (lam_um * 1e4)            # λF_λ in erg/s/cm² (Å as bandpass scale)
         lF_l_err = F_err * (lam_um * 1e4)
 
-        # Approximate bandpass width — 15% of λ_eff if not otherwise known.
+        # Approximate bandpass width, 15% of λ_eff if not otherwise known.
         bp = lam_um * 0.15
 
         # Colour each point by its effective wavelength so the SED shape
-        # reads directly off the plot (blue → short λ, red → long λ).
+        # reads directly off the plot (blue -> short λ, red -> long λ).
         cmap = plt.cm.RdYlBu_r
         lam_log = np.log10(lam_um)
         norm = plt.Normalize(vmin=lam_log.min(), vmax=lam_log.max())
@@ -1127,7 +1127,7 @@ class Star:
             obs["log_L"] = np.log10(self.luminosity)
         if self.radius is not None:
             obs["log_R"] = np.log10(self.radius)
-        # Photometric bands — translate pyphot names to BC table names
+        # Photometric bands, translate pyphot names to BC table names
         from lachesis.filters import PYPHOT_TO_BC
         for band, (mag, err) in self.magnitudes.items():
             bc_name = PYPHOT_TO_BC.get(band)

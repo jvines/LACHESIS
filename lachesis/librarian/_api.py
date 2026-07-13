@@ -1,4 +1,4 @@
-"""Librarian — automated photometry and astrometry retrieval.
+"""Librarian, automated photometry and astrometry retrieval.
 
 Queries Gaia DR3 best_neighbour tables for catalog crossmatching,
 with VizieR XMatch fallback when Gaia TAP is unavailable.
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore", category=UserWarning, append=True)
 
-# Local Vizier instance — never mutate the module-level singleton, which is
+# Local Vizier instance, never mutate the module-level singleton, which is
 # shared across the whole Python process and breaks any other consumer of
 # astroquery in the same interpreter.
 Vizier = _VizierClass(row_limit=-1, columns=["all"], timeout=60)
@@ -37,7 +37,7 @@ Gaia.TIMEOUT = 60
 XMatch.TIMEOUT = 60
 Catalogs.TIMEOUT = 60
 
-# Shared executor used by _with_timeout — avoids per-call pool spawn/teardown.
+# Shared executor used by _with_timeout, avoids per-call pool spawn/teardown.
 _TIMEOUT_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="librarian")
 
 # Module-level dustmap caches. Constructing SFDQuery loads ~600 MB of FITS;
@@ -297,8 +297,8 @@ class Librarian:
         self._coord = SkyCoord(ra=ra, dec=dec, unit="deg")
         self._ignore = set(ignore)
         # [Fe/H] prior configuration.
-        #   feh_source: "hypatia" → Hypatia for [Fe/H] (survey fallback on miss),
-        #               surveys for Teff/logg; "survey" → surveys only.
+        #   feh_source: "hypatia" -> Hypatia for [Fe/H] (survey fallback on miss),
+        #               surveys for Teff/logg; "survey" -> surveys only.
         self._feh_source = feh_source
         self._hypatia_statistic = hypatia_statistic
         self._hypatia_uncertainty = hypatia_uncertainty
@@ -408,12 +408,12 @@ class Librarian:
         # prior. The photometric SED already constrains Teff via BC tables;
         # injecting GSP-Phot as a separate observable double-counts the
         # information and pins to the sampler-percentile width (formal σ
-        # ≈ 1–5 K) which is ~100x narrower than the actual systematic vs
-        # spectroscopy (Andrae+23 quotes ±100–200 K). Spectroscopic priors
-        # used by LACHESIS are [Fe/H] (and optionally logg) — Teff is
+        # ≈ 1-5 K) which is ~100x narrower than the actual systematic vs
+        # spectroscopy (Andrae+23 quotes ±100-200 K). Spectroscopic priors
+        # used by LACHESIS are [Fe/H] (and optionally logg), Teff is
         # output, not input.
 
-        # FLAME radius — 5x error inflation (ARIADNE convention to avoid
+        # FLAME radius, 5x error inflation (ARIADNE convention to avoid
         # over-constraining from crude FLAME estimates)
         rad = _col(ap, "Rad-Flame") if ap is not None else None
         if rad is not None:
@@ -524,7 +524,7 @@ class Librarian:
             if cat_name in self._ignore:
                 continue
 
-            # Cone-only fallback (RAVE, SkyMapper — not on XMatch server)
+            # Cone-only fallback (RAVE, SkyMapper, not on XMatch server)
             if cat_name in _CONE_ONLY_FALLBACK:
                 viz_cat, id_cols = _CONE_ONLY_FALLBACK[cat_name]
                 result = _with_timeout(
@@ -567,7 +567,7 @@ class Librarian:
                     if src_mask.sum() > 0:
                         row = xm[src_mask][0]
 
-                # Pattern B: APASS — extract mags directly from XMatch row
+                # Pattern B: APASS, extract mags directly from XMatch row
                 if cat_name == "APASS":
                     self._ids["APASS"] = "xmatch_done"
                     for band in _CATALOGS["APASS"].bands:
@@ -1017,11 +1017,11 @@ class Librarian:
         PASTEL > APOGEE DR17 > GALAH DR3 > RAVE DR6 > LAMOST DR11.
 
         [Fe/H] depends on ``feh_source``:
-          * "hypatia" (default) — the Hypatia Catalog, a multi-study
+          * "hypatia" (default), the Hypatia Catalog, a multi-study
             high-resolution-spectroscopy compilation whose spread gives a
             realistic σ; falls back to the survey-chain [Fe/H] on a Hypatia
             miss.
-          * "survey" — use the survey-chain [Fe/H] (legacy behaviour).
+          * "survey", use the survey-chain [Fe/H] (legacy behaviour).
         """
         base = None
         for query_fn, source_name in [
@@ -1358,7 +1358,7 @@ class Librarian:
             mag, err = self._magnitudes[band]
             print(colored(f"{t2}{band:^20s}\t{mag: ^9.4f}\t{err: ^11.4f}", c))
 
-        # Stellar params — new color (matching ARIADNE's display_star_fin)
+        # Stellar params, new color (matching ARIADNE's display_star_fin)
         c = random.choice(['red', 'green', 'blue', 'yellow', 'grey', 'magenta', 'cyan', 'white'])
         if self._gaia_id:
             print(colored(f"{t3}Gaia DR3 ID : {self._gaia_id}", c))

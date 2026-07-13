@@ -1,4 +1,4 @@
-"""Test the ARIADNE → LACHESIS pipeline with a real ARIADNE .nc file."""
+"""Test the ARIADNE -> LACHESIS pipeline with a real ARIADNE .nc file."""
 from lachesis.star import Star
 from lachesis.fitter import Fitter
 from lachesis.plotter import ISOPlotter

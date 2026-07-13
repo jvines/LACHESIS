@@ -144,7 +144,7 @@ class IsochronePrior:
         self._imf = _IMF_FUNCTIONS.get(imf, chabrier_imf)
 
         # Age prior type: "log_uniform" (flat in log_age, default) or
-        # "uniform" (flat in linear age — P(log_age) ∝ 10^log_age).
+        # "uniform" (flat in linear age, P(log_age) ∝ 10^log_age).
         self._age_type = age_prior
 
         # [Fe/H] prior
@@ -160,14 +160,14 @@ class IsochronePrior:
                 samples = np.asarray(feh_prior[1])
                 self._build_feh_kde(samples)
             elif self._feh_type in ("morton", "rave"):
-                # Named population priors — build inverse CDF for sampling
+                # Named population priors, build inverse CDF for sampling
                 self._build_named_feh_prior(self._feh_type)
 
         self._has_distance = distance_prior is not None
         self._has_av = av_range is not None
         self._has_vini = vini_range is not None
         if self._has_distance:
-            # ("normal", mean, sigma) — truncated normal at 0, like ARIADNE
+            # ("normal", mean, sigma), truncated normal at 0, like ARIADNE
             self._dist_type = distance_prior[0]
             self._dist_mean = distance_prior[1]
             self._dist_sigma = distance_prior[2]
@@ -269,13 +269,13 @@ class IsochronePrior:
         return len(self.param_names)
 
     def prior_transform(self, u: np.ndarray) -> np.ndarray:
-        """Map unit cube [0,1]^N → physical parameter space."""
+        """Map unit cube [0,1]^N -> physical parameter space."""
         theta = np.empty_like(u)
         theta[0] = self.eep_lo + u[0] * (self.eep_hi - self.eep_lo)
 
         # Age prior
         if self._age_type == "uniform":
-            # Flat in LINEAR age: P(tau) = const → P(log_tau) ∝ 10^log_tau
+            # Flat in LINEAR age: P(tau) = const -> P(log_tau) ∝ 10^log_tau
             # Inverse CDF: log_tau = log10(10^lo + u * (10^hi - 10^lo))
             tau_lo = 10.0 ** self.age_lo
             tau_hi = 10.0 ** self.age_hi
@@ -378,7 +378,7 @@ class IsochronePrior:
         lnp = 0.0
 
         # EEP prior: IMF(mass) * |dm/dEEP|
-        # This is the key fix — not flat in EEP
+        # This is the key fix, not flat in EEP
         if initial_mass is not None and dm_deep is not None and dm_deep > 0:
             imf_val = self._imf(initial_mass)
             if imf_val <= 0:

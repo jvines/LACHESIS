@@ -1,7 +1,7 @@
 """Test fixtures for LACHESIS.
 
 Test data lives in `tests/data/` (not shipped). Tests requiring it are
-skipped cleanly when the files are absent — failing the assert at fixture
+skipped cleanly when the files are absent, failing the assert at fixture
 setup would silently break unrelated tests in some pytest configs.
 The location can be overridden with the LACHESIS_TEST_DATA env var.
 """

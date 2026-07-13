@@ -1,4 +1,4 @@
-"""Tests for MIST grid parsing — written BEFORE implementation (TDD)."""
+"""Tests for MIST grid parsing, written BEFORE implementation (TDD)."""
 
 from pathlib import Path
 
@@ -147,7 +147,7 @@ class TestMISTGrid:
         assert grid._data.shape[1] == 107
 
     def test_hdf5_roundtrip(self, sample_iso_path, tmp_path):
-        """Save to HDF5 and reload — data should match."""
+        """Save to HDF5 and reload, data should match."""
         grid = MISTGrid(sample_iso_path.parent)
         h5_path = tmp_path / "mist_test.h5"
         grid.to_hdf5(h5_path)

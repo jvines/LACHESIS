@@ -1,4 +1,4 @@
-"""Tests for arviz InferenceData output — TDD."""
+"""Tests for arviz InferenceData output, TDD."""
 
 from pathlib import Path
 
@@ -99,7 +99,7 @@ class TestSaveSummaryDat:
         assert "Teff(K)" in text
         assert "Radius(Rsun)" in text
         # Sampled-param rows that the v0.0.5 .dat lost
-        assert "Age(Gyr)" in text, "Age row dropped — log_age->Age conversion broken"
+        assert "Age(Gyr)" in text, "Age row dropped, log_age->Age conversion broken"
         assert "[Fe/H]" in text, "[Fe/H] row missing"
         # Distance / Av only present if those params were sampled in the
         # particular fit. The basic fit_result fixture only fits eep,
@@ -118,7 +118,7 @@ class TestSaveSummaryDat:
         save_summary_dat(str(out), result_no_pn, param_names=None)
         text = out.read_text()
         assert "Mass(Msun)" in text  # derived rows still written
-        assert "[Fe/H]" not in text  # sampled rows skipped — this is the
+        assert "[Fe/H]" not in text  # sampled rows skipped, this is the
                                      # v0.0.5 _BMA.dat bug we're guarding
         assert "EEP" not in text
 

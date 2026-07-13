@@ -1,4 +1,4 @@
-"""Tests for PARSEC grid — TDD."""
+"""Tests for PARSEC grid, TDD."""
 
 from pathlib import Path
 

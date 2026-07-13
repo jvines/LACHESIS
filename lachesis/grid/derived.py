@@ -38,7 +38,7 @@ def compute_dm_deep(
 
     Plain ``np.gradient`` returns 0 across constant-mass plateaus that arise
     when the (Fe/H, age, EEP) regrid samples the EEP axis more finely than
-    the native mass-track spacing — so multiple EEP cells inherit the same
+    the native mass-track spacing, so multiple EEP cells inherit the same
     mass. PARSEC's shipped grid has plateaus over ~37% of the MS volume,
     which the EEP prior ``log P(eep) = log IMF(M) + log |dM/dEEP|`` then
     rejects (``-inf`` from the zero gradient). MIST has a few such cells,

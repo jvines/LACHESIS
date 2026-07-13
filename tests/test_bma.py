@@ -1,4 +1,4 @@
-"""Tests for Bayesian Model Averaging — TDD."""
+"""Tests for Bayesian Model Averaging, TDD."""
 
 from pathlib import Path
 
@@ -35,7 +35,7 @@ class TestBMA:
         r2 = _make_fake_result(logz=5.0, logzerr=0.1, n_samples=100, seed=43)
 
         bma = bayesian_model_average([r1, r2], names=["low_Z", "high_Z"])
-        # Model 2 has much higher evidence → should dominate
+        # Model 2 has much higher evidence -> should dominate
         assert bma.weights[1] > bma.weights[0]
         assert bma.weights[1] > 0.9
 
@@ -45,7 +45,7 @@ class TestBMA:
         r2 = _make_fake_result(logz=0.0, logzerr=0.1, n_samples=100, seed=43)
 
         bma = bayesian_model_average([r1, r2])
-        # Equal evidence → roughly equal samples from each
+        # Equal evidence -> roughly equal samples from each
         assert len(bma.samples) > 0
         assert len(bma.samples) <= 200  # at most all samples
 

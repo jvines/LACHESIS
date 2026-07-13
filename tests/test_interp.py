@@ -1,4 +1,4 @@
-"""Tests for 3D grid interpolation — written BEFORE implementation (TDD)."""
+"""Tests for 3D grid interpolation, written BEFORE implementation (TDD)."""
 
 import numpy as np
 import pytest
@@ -34,7 +34,7 @@ class TestGridInterpolator:
         assert interp is not None
 
     def test_returns_dict(self, interp):
-        """Should return dict of column_name → float."""
+        """Should return dict of column_name -> float."""
         result = interp(eep=300.0, log_age=9.0, feh=0.0)
         assert isinstance(result, dict)
         assert "log_Teff" in result
@@ -95,7 +95,7 @@ class TestGridInterpolator:
         n = 10
         feh = grid.feh_values[0]
         age = grid.age_values[50]
-        # Valid EEPs — skip edges to avoid NaN from neighbor interpolation
+        # Valid EEPs, skip edges to avoid NaN from neighbor interpolation
         col_idx = grid.columns.index("log_Teff")
         valid = np.where(~np.isnan(grid._data[0, 50, :, col_idx]))[0]
         interior = valid[3:-3]  # skip edges
@@ -111,7 +111,7 @@ class TestGridInterpolator:
     def test_physical_monotonicity_ms(self, grid, interp):
         """On the main sequence, Teff should increase with mass at fixed age."""
         feh = grid.feh_values[0]
-        age = 9.0  # 1 Gyr — main sequence should be well-populated
+        age = 9.0  # 1 Gyr, main sequence should be well-populated
 
         age_idx = np.argmin(np.abs(grid.age_values - age))
         col_idx_teff = grid.columns.index("log_Teff")
@@ -162,7 +162,7 @@ class TestModelGridInterpolator:
             assert result["Teff"] == pytest.approx(expected, rel=0.01)
 
     def test_solar_like_values(self, model_grid, model_interp):
-        """Interpolate near solar params — sanity check."""
+        """Interpolate near solar params, sanity check."""
         # Sun: ~1 Msun, age ~4.6 Gyr (log_age ~9.66), [Fe/H] ~0
         # EEP ~350 (mid main sequence)
         result = model_interp(eep=350.0, log_age=9.66, feh=0.0)

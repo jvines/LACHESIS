@@ -1,7 +1,7 @@
 """Single-grid fit with STAREVOL (Amard+ 2019).
 
 STAREVOL includes stellar rotation (Vini) as a free parameter, sampled as
-a 6th dimension. We demonstrate it on HD 209458 — a G0V star with modest
+a 6th dimension. We demonstrate it on HD 209458, a G0V star with modest
 rotation (v sin i ~ 4 km/s).
 """
 from lachesis.star import Star

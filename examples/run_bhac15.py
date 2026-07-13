@@ -1,7 +1,7 @@
 """Single-grid fit with BHAC15 (M dwarf isochrones).
 
-BHAC15 covers 0.01–1.4 Msun at solar metallicity, so we demonstrate it on
-Proxima Centauri — a nearby, well-studied M5.5V dwarf with a literature
+BHAC15 covers 0.01-1.4 Msun at solar metallicity, so we demonstrate it on
+Proxima Centauri, a nearby, well-studied M5.5V dwarf with a literature
 mass of 0.122 Msun (Kervella+ 2017, orbital dynamics with Proxima b).
 """
 from lachesis.star import Star

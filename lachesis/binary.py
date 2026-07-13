@@ -1,4 +1,4 @@
-"""Binary star model — combined-flux photometry from two components.
+"""Binary star model, combined-flux photometry from two components.
 
 Both components share age, [Fe/H], distance, Av.
 Each has its own EEP (and thus mass, Teff, etc.).
@@ -88,13 +88,13 @@ def binary_log_likelihood(
     """Log-likelihood for a binary system.
 
     Photometric observables use combined-flux magnitudes (flux-weighted blend).
-    Spectroscopic observables use the primary's properties — note that real
+    Spectroscopic observables use the primary's properties, note that real
     binaries produce flux-weighted blended spectra, so this is an approximation
     that treats spectroscopic priors as 'belongs to the primary'.
     """
     assert eep_secondary <= eep_primary, (
         "binary_log_likelihood expects eep_secondary <= eep_primary; the "
-        "prior_transform enforces this — bypassing it produces nonsense."
+        "prior_transform enforces this, bypassing it produces nonsense."
     )
 
     pred_primary = interp(eep=eep_primary, log_age=log_age, feh=feh)
@@ -126,7 +126,7 @@ def binary_log_likelihood(
             return -np.inf
         pred_mags = pred_mags_result
     elif any(k in phot_bands for k in observed):
-        # Photometric observables present but no BC table — refuse the model.
+        # Photometric observables present but no BC table, refuse the model.
         return -np.inf
 
     lnl = 0.0

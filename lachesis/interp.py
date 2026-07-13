@@ -16,16 +16,16 @@ def _recompute_linear_from_logs(result):
     from the log-quantities in the same result.
 
     Background: regridded grids (notably PARSEC) can place wildly different
-    evolutionary states at the same EEP across (feh, age) — e.g. EEP=322
+    evolutionary states at the same EEP across (feh, age), e.g. EEP=322
     is end-of-MS for one isochrone but RGB tip for another, so the
-    interpolation cube's `radius` corners span 0.1–130 R☉. Linear
+    interpolation cube's `radius` corners span 0.1-130 R☉. Linear
     interpolation across that cube produces nonsense (e.g. R=8 R☉ for a
     main-sequence query). The log-quantities (`log_R`) interpolate cleanly
     because they're well-behaved across the same cube.
 
     The fix: trust `log_R` as the radius source-of-truth and recompute
     linear `radius` (and `density`, which depends on radius) post-interp.
-    Mass, log_g, log_L, log_Teff are unaffected — they don't span orders
+    Mass, log_g, log_L, log_Teff are unaffected, they don't span orders
     of magnitude across the cube. Mbol = -2.5*log_L + const is a linear
     function of log_L, so it's also unaffected. Teff = 10**log_Teff
     *could* show the same pathology in principle, but log_Teff varies by
@@ -118,7 +118,7 @@ class GridInterpolator:
 
         if self._has_vini:
             if vini is None:
-                raise ValueError("Grid has rotation axis — vini is required")
+                raise ValueError("Grid has rotation axis, vini is required")
             vini = np.asarray(vini, dtype=float)
             if scalar:
                 vini = vini.reshape(1)

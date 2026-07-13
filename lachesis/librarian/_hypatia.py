@@ -6,7 +6,7 @@ independent literature sources, all renormalised to a single solar abundance
 scale. Querying Hypatia for [Fe/H] gives two advantages over PASTEL:
 
   * the returned uncertainty is the *spread across independent studies*, which
-    is realistic — unlike PASTEL's inverse-variance weighted-mean σ, which is
+    is realistic, unlike PASTEL's inverse-variance weighted-mean σ, which is
     unrealistically tight and biased toward whichever study quoted the smallest
     statistical error;
   * every star can be placed on the same solar normalisation.
@@ -15,14 +15,14 @@ API notes (v2.2.0, verified 2026-05):
   * endpoint:  GET https://hypatiacatalog.com/hypatia/api/v2/composition
   * no authentication, no rate limiting
   * query by any SIMBAD name; "Gaia DR3 <id>" and "2MASS J<id>" both resolve
-  * the response's ``std`` field is BROKEN — it returns log10 of the std of the
+  * the response's ``std`` field is BROKEN, it returns log10 of the std of the
     *linear* abundances (negative numbers). We never use it; we recompute the
     dex std ourselves from ``all_values``.
 
 Reliable response fields used here:
-  * ``median_value`` / ``mean`` — central [Fe/H] in dex on the chosen solarnorm
-  * ``plusminus``               — (max−min)/2 spread in dex (2+ studies)
-  * ``all_values``              — list of {value, catalog} per-study measurements
+  * ``median_value`` / ``mean``, central [Fe/H] in dex on the chosen solarnorm
+  * ``plusminus``, (max−min)/2 spread in dex (2+ studies)
+  * ``all_values``, list of {value, catalog} per-study measurements
 """
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ def query_hypatia_feh(
     Parameters
     ----------
     gaia_id : int | None
-        Gaia DR3 source_id. Queried first as ``"Gaia DR3 <id>"`` — the most
+        Gaia DR3 source_id. Queried first as ``"Gaia DR3 <id>"``, the most
         reliable resolver since every benchmark star has one.
     names : iterable of str
         Fallback SIMBAD names tried in order if the Gaia ID misses

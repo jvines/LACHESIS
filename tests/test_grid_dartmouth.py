@@ -170,7 +170,7 @@ class TestDartmouthModelGrid:
     def test_nan_padding(self, sample_grid_dir):
         grid = DartmouthModelGrid(sample_grid_dir)
         ci = {c: i for i, c in enumerate(grid.columns)}
-        # EEP=15 (idx=5) should be NaN — not in the data
+        # EEP=15 (idx=5) should be NaN, not in the data
         fi, ai, ei = 0, 0, 5
         assert np.isnan(grid._data[fi, ai, ei, ci["log_Teff"]])
 

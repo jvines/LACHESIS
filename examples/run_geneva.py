@@ -1,7 +1,7 @@
 """Single-grid fit with Geneva (Ekstroem+ 2012).
 
 Geneva isochrones are solar metallicity only, so we demonstrate them on
-HD 209458 — a G0V solar-neighborhood star with near-solar metallicity
+HD 209458, a G0V solar-neighborhood star with near-solar metallicity
 and clean multi-band photometry.
 """
 from lachesis.star import Star

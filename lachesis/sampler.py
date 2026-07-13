@@ -226,8 +226,8 @@ class IsochroneFitter:
         # Dynesty's 'multi' bound calls scipy.cluster.vq.kmeans2 which has a
         # known crash on degenerate live-point distributions (empty clusters,
         # see scipy/_vq.pyx ``_update_cluster_means`` IndexError). When the
-        # posterior tightens enough — e.g. a star with a sharp external Teff
-        # prior — the live points collapse onto a low-rank manifold and
+        # posterior tightens enough, e.g. a star with a sharp external Teff
+        # prior, the live points collapse onto a low-rank manifold and
         # kmeans2 buffer-accesses out of bounds. Surface as an
         # IndexError("Out of bounds on buffer access ...") from deep inside
         # scipy.cluster._vq. Workaround: retry with bound='single', which

@@ -40,7 +40,7 @@ def sample_grid_dir(tmp_path):
     f1 = tmp_path / "Isochr_Z0.014_Vini0.00_t09.500.dat"
     f1.write_text(_SAMPLE_DAT)
 
-    # Second file at a different age — fewer rows (older = fewer stars)
+    # Second file at a different age, fewer rows (older = fewer stars)
     dat2 = textwrap.dedent("""\
  M_ini      Z_ini  OmOc_ini  M       logL     logTe_c  logTe_nc      MBol        MV       U-B       B-V     B2-V1      r_pol   oblat   g_pol
 

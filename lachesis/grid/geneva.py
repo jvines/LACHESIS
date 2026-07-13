@@ -4,8 +4,7 @@ Parses individual isochrone files from the Geneva stellar evolution group.
 Only Z=0.014 (solar) precomputed isochrones are available from the server;
 other metallicities only have evolutionary tracks.
 
-Each file is a single (Z, age) isochrone. No EEPs are provided —
-mass-sorted row index is used as a proxy EEP.
+Each file is a single (Z, age) isochrone. No EEPs are provided, mass-sorted row index is used as a proxy EEP.
 
 Grid shape: (n_feh, n_age, n_eep, n_cols).
 """
@@ -50,9 +49,9 @@ def _parse_geneva_file(path: Path) -> dict:
     Returns
     -------
     dict with keys:
-        z : float       — metal mass fraction
-        log_age : float — log10(age/yr) extracted from filename
-        data : ndarray  — shape (n_rows, 6) with columns:
+        z : float, metal mass fraction
+        log_age : float, log10(age/yr) extracted from filename
+        data : ndarray, shape (n_rows, 6) with columns:
             [M_ini, M, logL, logTe_c, g_pol, r_pol_cm]
     """
     # Extract Z and log_age from filename
@@ -118,7 +117,7 @@ def _parse_geneva_file(path: Path) -> dict:
 class GenevaModelGrid:
     """Geneva (Ekstroem+ 2012) model grid.
 
-    Grid shape: (n_feh, n_age, n_eep, n_cols) — same interface as
+    Grid shape: (n_feh, n_age, n_eep, n_cols), same interface as
     Dartmouth/MIST/PARSEC.
 
     Since Geneva provides no EEPs, mass-sorted row index is used.
@@ -246,7 +245,7 @@ class GenevaModelGrid:
 
     @property
     def fitting_eep_range(self) -> tuple[int, int]:
-        """Geneva's full range — row-index EEPs cover the whole isochrone."""
+        """Geneva's full range, row-index EEPs cover the whole isochrone."""
         return self.eep_range
 
     @property

@@ -3,7 +3,7 @@
 Supports spectroscopic observables (log_Teff, log_g, etc.) and
 photometric magnitudes (via BC table integration).
 
-Hot path: ``log_likelihood`` is evaluated O(10^5–10^6) times per fit. All the
+Hot path: ``log_likelihood`` is evaluated O(10^5-10^6) times per fit. All the
 work that does NOT depend on the sampled parameters (which observables the grid
 can predict, their σ, log σ, the normalisation constant) is invariant across a
 fit, so it is precomputed once into a *likelihood plan* via

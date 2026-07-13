@@ -105,7 +105,7 @@ _SYSTEM_ZERO_POINT: dict[str, str] = {
 }
 
 # Per-band override map for systems that mix conventions (e.g. UBVRIplus
-# bundles Gaia EDR3 + 2MASS + Tycho/Bessell — all Vega — alongside Hipparcos
+# bundles Gaia EDR3 + 2MASS + Tycho/Bessell, all Vega, alongside Hipparcos
 # Hp which is also Vega; nothing to override for now). Kept here so
 # additions are obvious.
 _BAND_ZERO_POINT_OVERRIDES: dict[str, str] = {}
@@ -449,8 +449,8 @@ class BCTable:
 
         Single-pass hot path: interpolates the BC once and folds the bolometric
         magnitude and distance modulus straight in, avoiding the two
-        intermediate dicts of get_bc → get_absolute_mag (this is called once per
-        likelihood evaluation, O(10^5–10^6) times per fit).
+        intermediate dicts of get_bc -> get_absolute_mag (this is called once per
+        likelihood evaluation, O(10^5-10^6) times per fit).
         """
         if _HAS_NUMBA and bands is None:
             band_names = self._active_bands if self._active_bands is not None else self._bands

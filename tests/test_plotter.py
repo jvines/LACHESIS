@@ -1,4 +1,4 @@
-"""Tests for ISOPlotter — headless matplotlib rendering.
+"""Tests for ISOPlotter, headless matplotlib rendering.
 
 The plotter loads results from a saved .nc file at construction time
 and exposes plot_corner / plot_histograms / plot_hr / plot_mass_age /
@@ -241,7 +241,7 @@ class TestBMAOnly:
         assert set(labels.tolist()) == {"MIST", "PARSEC"}
 
     def test_histograms_bma_path(self, bma_plotter):
-        """BMA plot_histograms calls gaussian_kde — guards against the
+        """BMA plot_histograms calls gaussian_kde, guards against the
         v0.0.5 regression where the import was missing entirely from
         plotter/_api.py and the BMA-only branches raised NameError.
         The single-grid path doesn't exercise these lines, so this

@@ -1,4 +1,4 @@
-"""Tests for binary star model — TDD."""
+"""Tests for binary star model, TDD."""
 
 from pathlib import Path
 
@@ -101,7 +101,7 @@ class TestBinaryLikelihood:
             for band in ["Bessell_V", "2MASS_J", "Gaia_G_EDR3"]:
                 if np.isfinite(mag_single[band]) and np.isfinite(mag_binary[band]):
                     diff = mag_single[band] - mag_binary[band]
-                    # 2x flux → -2.5*log10(2) = 0.7526 mag brighter
+                    # 2x flux -> -2.5*log10(2) = 0.7526 mag brighter
                     assert diff == pytest.approx(0.7526, abs=0.01)
 
     def test_spectro_binary_works(self, interp):

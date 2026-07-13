@@ -1,4 +1,4 @@
-"""Librarian — automated photometry and astrometry retrieval.
+"""Librarian, automated photometry and astrometry retrieval.
 
 Queries Gaia DR3 best_neighbour tables for catalog crossmatching, with
 VizieR XMatch fallback when Gaia TAP is unavailable. Uses pyphot filter

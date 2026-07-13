@@ -17,7 +17,7 @@ from lachesis.grid.derived import (
 
 class TestDerivedQuantities:
     def test_teff_solar(self):
-        """log(5772) ≈ 3.7613 → should give back 5772 K."""
+        """log(5772) ≈ 3.7613 -> should give back 5772 K."""
         log_teff = np.log10(5772.0)
         assert compute_teff(log_teff) == pytest.approx(5772.0, rel=1e-6)
 
@@ -31,23 +31,23 @@ class TestDerivedQuantities:
         assert np.isnan(compute_teff(np.nan))
 
     def test_mbol_solar(self):
-        """L = L_sun → log_L = 0 → Mbol = 4.74."""
+        """L = L_sun -> log_L = 0 -> Mbol = 4.74."""
         assert compute_mbol(0.0) == pytest.approx(MBOL_SUN)
 
     def test_mbol_brighter(self):
-        """log_L = 1 (10x solar) → Mbol = 4.74 - 2.5 = 2.24."""
+        """log_L = 1 (10x solar) -> Mbol = 4.74 - 2.5 = 2.24."""
         assert compute_mbol(1.0) == pytest.approx(MBOL_SUN - 2.5)
 
     def test_radius_solar(self):
-        """log_R = 0 → R = 1 R_sun."""
+        """log_R = 0 -> R = 1 R_sun."""
         assert compute_radius(0.0) == pytest.approx(1.0)
 
     def test_radius_giant(self):
-        """log_R = 2 → R = 100 R_sun."""
+        """log_R = 2 -> R = 100 R_sun."""
         assert compute_radius(2.0) == pytest.approx(100.0)
 
     def test_density_solar(self):
-        """Sun: M=1, R=1 → known density ~1.41 g/cm^3."""
+        """Sun: M=1, R=1 -> known density ~1.41 g/cm^3."""
         rho = compute_density(np.array(1.0), np.array(1.0))
         assert rho == pytest.approx(1.41, rel=0.02)
 

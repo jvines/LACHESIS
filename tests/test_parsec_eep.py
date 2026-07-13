@@ -1,4 +1,4 @@
-"""Tests for PARSEC → EEP translation and model grid — TDD."""
+"""Tests for PARSEC -> EEP translation and model grid, TDD."""
 
 from pathlib import Path
 
@@ -43,7 +43,7 @@ class TestPARSECEEPTranslation:
         assert len(ms_eeps) > 10
 
     def test_grid_shape_is_4d(self, parsec_grid):
-        """Grid should be (n_feh, n_age, n_eep, n_cols) — same as MIST."""
+        """Grid should be (n_feh, n_age, n_eep, n_cols), same as MIST."""
         assert parsec_grid._data.ndim == 4
         assert parsec_grid._data.shape[0] == len(parsec_grid.feh_values)
         assert parsec_grid._data.shape[1] == len(parsec_grid.age_values)
@@ -59,7 +59,7 @@ class TestPARSECInterpolation:
         assert interp is not None
 
     def test_interpolate_solar(self, parsec_grid):
-        """Interpolate at solar-like params — should give reasonable values."""
+        """Interpolate at solar-like params, should give reasonable values."""
         from lachesis.interp import GridInterpolator
         interp = GridInterpolator(parsec_grid)
         # MS star, solar age, solar metallicity
@@ -79,7 +79,7 @@ class TestPARSECSampler:
     """PARSEC should work end-to-end through the sampler."""
 
     def test_spectro_fit(self, parsec_grid):
-        """Fit solar twin with PARSEC — same as we did with MIST."""
+        """Fit solar twin with PARSEC, same as we did with MIST."""
         from lachesis.interp import GridInterpolator
         from lachesis.sampler import IsochroneFitter
 

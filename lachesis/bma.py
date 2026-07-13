@@ -28,7 +28,7 @@ class BMAResult:
     log_evidence: float = 0.0    # combined BMA log-evidence: logsumexp(log_z) - log(K)
     log_evidence_errors: np.ndarray | None = None  # (n_models,) per-grid nested-sampling log-evidence uncertainty
     # Optional per-grid raw nested-sampling posteriors, keyed by model name.
-    # These are the unweighted per-grid outputs — used by the plotter for
+    # These are the unweighted per-grid outputs, used by the plotter for
     # per-model histograms, HR tracks, etc. `samples`/`derived` above are
     # BMA-weighted; these are not.
     per_grid_samples: dict | None = None  # {name: (n, n_params) array}

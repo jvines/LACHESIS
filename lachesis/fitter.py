@@ -1,4 +1,4 @@
-"""Fitter class — ARIADNE-compatible property-based isochrone fitter."""
+"""Fitter class, ARIADNE-compatible property-based isochrone fitter."""
 
 import multiprocessing as mp
 import os
@@ -378,7 +378,7 @@ class Fitter:
 
         # [Fe/H] prior priority:
         #   1. User override in prior_setup (normal, morton, rave)
-        #   2. Full ARIADNE posterior samples (KDE) — preserves shape
+        #   2. Full ARIADNE posterior samples (KDE), preserves shape
         #   3. Spectroscopic prior from star.feh/feh_e (gaussian)
         #   4. Uniform (default)
         feh_prior = None
@@ -448,7 +448,7 @@ class Fitter:
 
         # Build KDE-based external priors from ARIADNE posteriors.
         # Pre-tabulate log(pdf) on a fine grid and interpolate with np.interp
-        # at evaluation time — O(1) per call instead of O(N_samples).
+        # at evaluation time, O(1) per call instead of O(N_samples).
         external_kdes = {}
         if self._star.external_posteriors:
             from scipy.stats import gaussian_kde
@@ -474,7 +474,7 @@ class Fitter:
         # Drop grids whose [Fe/H] coverage doesn't overlap the star's prior.
         # Without this, dynesty wastes 1000 init attempts before raising
         # "could not find a single point that have a valid log-likelihood"
-        # — e.g. YAPSI ([-0.75, +0.55]) asked to fit a halo star with
+        #, e.g. YAPSI ([-0.75, +0.55]) asked to fit a halo star with
         # feh_prior = N(-1.47, 0.07). The clamp on grid_feh_lo/hi below
         # narrows the prior interval but cannot rescue a Gaussian prior
         # whose ±3σ window is entirely outside the grid axis.
@@ -526,8 +526,7 @@ class Fitter:
         # likelihood support there and dynesty would burn its init attempts
         # before failing. Mirrors the [Fe/H]-coverage drop above; the
         # fit-time zero-support drop in fit_bma() remains the backstop for
-        # misclassified stars. Acts only on the unambiguous 'giant' state —
-        # subgiants stay with every grid (partial coverage is enough for
+        # misclassified stars. Acts only on the unambiguous 'giant' state, # subgiants stay with every grid (partial coverage is enough for
         # the sampler to find support).
         if getattr(self._star, "evolutionary_state", "unknown") == "giant":
             dropped_g, kept_g = [], []
@@ -690,7 +689,7 @@ class Fitter:
         not parallelism. dynesty calls a Python ``loglike`` closure (which holds
         the GIL for theta unpacking + dispatch) wrapping a fast (~20 us) njit
         kernel, so the pool's per-proposal dispatch cost dominates and makes the
-        fit ~1.6x SLOWER — and worse the more likelihood calls there are, i.e.
+        fit ~1.6x SLOWER, and worse the more likelihood calls there are, i.e.
         the more dimensions/photometric bands. (Marking the kernel ``nogil`` did
         not help: the GIL-free window is too small next to the wrapper + queue
         overhead.) BMA parallelism comes from the grid-level PROCESS pool
@@ -703,7 +702,7 @@ class Fitter:
     def _pool_kwargs(pool, threads: int) -> dict:
         """Build the dynesty kwargs to forward when a pool exists.
 
-        dynesty requires ``queue_size`` ≥ 2 to use the pool — otherwise
+        dynesty requires ``queue_size`` ≥ 2 to use the pool, otherwise
         proposals run serially even with a pool attached.
         """
         if pool is None:
@@ -758,8 +757,7 @@ class Fitter:
 
         Mirrors ARIADNE's n_grid_jobs: the grids are independent fits, so a
         forked Pool runs several at once. Workers inherit the fully-initialised
-        Fitter (loaded grids, interpolators, numba-compiled kernels) via fork —
-        only the per-grid result dict is pickled back. Each grid runs
+        Fitter (loaded grids, interpolators, numba-compiled kernels) via fork, only the per-grid result dict is pickled back. Each grid runs
         single-threaded; grid-level parallelism replaces the inner pool.
         """
         global _BMA_FITTER
@@ -829,7 +827,7 @@ class Fitter:
         # bounded only by its own axis (no informative [Fe/H] prior pinned it
         # pre-emptively in initialize()), a star whose true [Fe/H] lies outside
         # the grid piles the posterior against the grid edge and returns a
-        # boundary-biased solution that can still score high evidence — e.g. a
+        # boundary-biased solution that can still score high evidence, e.g. a
         # sub-(-0.33) star on the Geneva grid. Exclude any grid whose [Fe/H]
         # posterior rails against its axis boundary, but never drop them all.
         if len(results) > 1:
@@ -950,7 +948,7 @@ class Fitter:
         weights = bma_result.weights
         mean_lz = float(np.sum(weights * log_z))
         logzerr_bma = float(np.sqrt(max(np.sum(weights * (log_z - mean_lz) ** 2), 0.0)))
-        # param_names from the first grid's prior — same across all BMA grids
+        # param_names from the first grid's prior, same across all BMA grids
         # by construction. Pass them through so save_summary_dat can write
         # the sampled-parameter rows (log_age, feh, distance, Av, eep, ...).
         param_names = self._fitters[self._grids[0]].prior.param_names

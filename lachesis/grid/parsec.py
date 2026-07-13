@@ -1,16 +1,16 @@
 """PARSEC isochrone grid with EEP translation.
 
 Translates PARSEC phase labels to MIST-compatible EEP numbers so both
-grids share the same (feh, age, eep) → observables parameterization.
+grids share the same (feh, age, eep) -> observables parameterization.
 
-PARSEC label → EEP mapping:
-  0 (PMS)   → EEP   1–201
-  1 (MS)    → EEP 202–454
-  2 (SGB)   → EEP 454–500
-  3 (RGB)   → EEP 500–605
-  4 (CHeB)  → EEP 631–707
-  5 (E-AGB) → EEP 707–808
-  6 (TP-AGB)→ EEP 808–1200
+PARSEC label -> EEP mapping:
+  0 (PMS) -> EEP   1-201
+  1 (MS) -> EEP 202-454
+  2 (SGB) -> EEP 454-500
+  3 (RGB) -> EEP 500-605
+  4 (CHeB) -> EEP 631-707
+  5 (E-AGB) -> EEP 707-808
+  6 (TP-AGB) -> EEP 808-1200
 
 PRODUCTION CUBE. The shipped cube (parsec_v1.2S_eeprebuild.h5, loaded via
 ``from_hdf5``) is built by ``scripts/rebuild_parsec_eep.py`` with a HOMOLOGOUS
@@ -24,7 +24,7 @@ LEGACY BUILDER. ``__init__`` + ``_assign_eep`` below build a cube from a
 directory of per-isochrone CSVs using per-phase linspace over mass-rank. That
 axis is NON-homologous and is retained only for the from-CSV API and the unit
 tests; it NaN-masks the PMS as a safety band-aid. Do not use it to regenerate
-the production cube — use the rebuild script.
+the production cube, use the rebuild script.
 """
 
 from pathlib import Path
@@ -38,7 +38,7 @@ from lachesis.grid.derived import (
     compute_teff,
 )
 
-# Phase label → (EEP_start, EEP_end)
+# Phase label -> (EEP_start, EEP_end)
 _LABEL_TO_EEP = {
     0: (1, 201),     # PMS
     1: (202, 454),   # MS
@@ -75,7 +75,7 @@ def _assign_eep(iso_df: pd.DataFrame) -> np.ndarray:
 class PARSECModelGrid:
     """PARSEC model grid with EEP translation.
 
-    Grid shape: (n_feh, n_age, n_eep, n_cols) — same as MIST.
+    Grid shape: (n_feh, n_age, n_eep, n_cols), same as MIST.
     Axes: [M/H], log_age, EEP (translated from PARSEC phase labels).
     """
 
@@ -97,7 +97,7 @@ class PARSECModelGrid:
             frames.append(pd.read_csv(f))
         all_data = pd.concat(frames, ignore_index=True)
 
-        # PARSEC returns ages like 9.00001, 9.00002 — different per [M/H].
+        # PARSEC returns ages like 9.00001, 9.00002, different per [M/H].
         # Round to 2 decimals to build a common grid.
         all_data["logAge"] = np.round(all_data["logAge"], 2)
         all_data["MH"] = np.round(all_data["MH"], 2)
@@ -115,7 +115,7 @@ class PARSECModelGrid:
         # Drop rows with NaN EEP (post-AGB, WD, etc.)
         all_data = all_data[np.isfinite(all_data["EEP"])].copy()
 
-        # Build global EEP axis — integer EEPs spanning all isochrones
+        # Build global EEP axis, integer EEPs spanning all isochrones
         eep_min = int(np.floor(all_data["EEP"].min()))
         eep_max = int(np.ceil(all_data["EEP"].max()))
         self._eep_values = np.arange(eep_min, eep_max + 1, dtype=float)
@@ -170,7 +170,7 @@ class PARSECModelGrid:
                     self._data[fi, ai, ei, ci["age"]] = age
 
         # Fill inter-phase NaN gaps by interpolating along EEP axis.
-        # E.g., the He flash gap (EEP 605–631) gets bridged.
+        # E.g., the He flash gap (EEP 605-631) gets bridged.
         for fi in range(n_feh):
             for ai in range(n_age):
                 for col_idx in range(n_cols):
@@ -222,7 +222,7 @@ class PARSECModelGrid:
         # +54% at sub-solar [Fe/H]) and contaminates the photometric fits too.
         # NaN-ing the PMS rows (done last, after gap-filling, so they are not
         # bridged) makes any interpolation cell that touches the PMS region
-        # return NaN, which the likelihood rejects — removing the fabricated
+        # return NaN, which the likelihood rejects, removing the fabricated
         # branch without affecting clean MS / evolved cells, which never touch
         # a PMS node. LACHESIS targets field stars, not pre-MS objects, and the
         # other grids retain PMS coverage if ever needed.
@@ -251,7 +251,7 @@ class PARSECModelGrid:
 
     @property
     def fitting_eep_range(self) -> tuple[int, int]:
-        """ZAMS (202) to TPAGB (808) — PARSEC uses MIST's EEP scheme."""
+        """ZAMS (202) to TPAGB (808), PARSEC uses MIST's EEP scheme."""
         return (max(202, int(self._eep_values[0])), min(808, int(self._eep_values[-1])))
 
     @property

@@ -16,12 +16,12 @@ def _make_fake_fits(path: Path, n_comp=2, n_mass=5, n_step=100):
     """Create a minimal YAPSI-like FITS file with 4D ImageHDU tracks.
 
     Structure mirrors the real YAPSI bundle:
-      CAGE  (n_comp, n_mass, n_step, 8) — age in Gyr
-      CLOGT (n_comp, n_mass, n_step, 8) — log(Teff)
-      CLOGG (n_comp, n_mass, n_step, 8) — log(g)
-      CLOGL (n_comp, n_mass, n_step, 8) — log(L/Lsun)
-      CFEHS (n_comp, n_mass, n_step, 8) — surface [Fe/H]
-      CAMAX (n_comp, n_mass, 4)         — max age info
+      CAGE  (n_comp, n_mass, n_step, 8), age in Gyr
+      CLOGT (n_comp, n_mass, n_step, 8), log(Teff)
+      CLOGG (n_comp, n_mass, n_step, 8), log(g)
+      CLOGL (n_comp, n_mass, n_step, 8), log(L/Lsun)
+      CFEHS (n_comp, n_mass, n_step, 8), surface [Fe/H]
+      CAMAX (n_comp, n_mass, 4), max age info
     """
     shape = (n_comp, n_mass, n_step, 8)
     feh_values = [0.0, -0.5]  # two compositions

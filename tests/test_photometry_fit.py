@@ -1,4 +1,4 @@
-"""Tests for photometric fitting with distance and extinction — TDD."""
+"""Tests for photometric fitting with distance and extinction, TDD."""
 
 from pathlib import Path
 

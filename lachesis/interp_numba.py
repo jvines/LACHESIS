@@ -114,7 +114,7 @@ def _trilinear(grid, ax0, ax1, ax2, x0, x1, x2, n_cols):
     return result
 
 
-@nb.njit(cache=True)  # parallel=True removed — numba TBB pool races with dynesty teardown across grids
+@nb.njit(cache=True)  # parallel=True removed, numba TBB pool races with dynesty teardown across grids
 def _trilinear_batch(grid, ax0, ax1, ax2, x0s, x1s, x2s, n_cols):
     """Vectorised trilinear interpolation; parallel over batch rows."""
     n = len(x0s)
@@ -181,7 +181,7 @@ def _quadlinear(grid, ax0, ax1, ax2, ax3, x0, x1, x2, x3, n_cols):
     return result
 
 
-@nb.njit(cache=True)  # parallel=True removed — numba TBB pool races with dynesty teardown across grids
+@nb.njit(cache=True)  # parallel=True removed, numba TBB pool races with dynesty teardown across grids
 def _quadlinear_batch(grid, ax0, ax1, ax2, ax3, x0s, x1s, x2s, x3s, n_cols):
     """Vectorised quadrilinear interpolation; parallel over batch rows."""
     n = len(x0s)
@@ -272,7 +272,7 @@ class NumbaGridInterpolator:
                 and (vini is None or isinstance(vini, (int, float)))):
             if self._has_vini:
                 if vini is None:
-                    raise ValueError("Grid has rotation axis — vini is required")
+                    raise ValueError("Grid has rotation axis, vini is required")
                 vals = _quadlinear(
                     self._data, self._feh, self._vini, self._ages, self._eeps,
                     float(feh), float(vini), float(log_age), float(eep),
@@ -294,7 +294,7 @@ class NumbaGridInterpolator:
 
         if self._has_vini:
             if vini is None:
-                raise ValueError("Grid has rotation axis — vini is required")
+                raise ValueError("Grid has rotation axis, vini is required")
             vini = np.asarray(vini, dtype=np.float64)
             if scalar:
                 vals = _quadlinear(

@@ -131,7 +131,7 @@ class MISTIsoFile:
 
 
 class MISTGrid:
-    """Full MIST isochrone grid (all [Fe/H] files → regular 4D array).
+    """Full MIST isochrone grid (all [Fe/H] files -> regular 4D array).
 
     Loads all .iso files from a directory, aligns them onto a common
     EEP axis, and stores as a (n_feh, n_age, n_eep, n_cols) array
@@ -185,7 +185,7 @@ class MISTGrid:
         n_eep = len(self._eep_values)
         n_cols = len(self._columns)
 
-        # Build 4D array: (feh, age, eep, col) — NaN where data doesn't exist
+        # Build 4D array: (feh, age, eep, col), NaN where data doesn't exist
         self._data = np.full((n_feh, n_age, n_eep, n_cols), np.nan)
 
         feh_order = np.argsort([p.feh for p in parsed])
@@ -216,7 +216,7 @@ class MISTGrid:
 
     @property
     def fitting_eep_range(self) -> tuple[int, int]:
-        """ZAMS (202) to TPAGB (808) — excludes PMS."""
+        """ZAMS (202) to TPAGB (808), excludes PMS."""
         return (max(202, int(self._eep_values[0])), min(808, int(self._eep_values[-1])))
 
     @property
@@ -261,8 +261,7 @@ class MISTModelGrid:
     ]
     # Derived columns computed after loading
     _DERIVED_COLS = ["Teff", "Mbol", "radius", "density", "dm_deep"]
-    # eep and age are axes, not stored as columns in the grid —
-    # but we keep them for the column list to match isochrones convention
+    # eep and age are axes, not stored as columns in the grid, # but we keep them for the column list to match isochrones convention
     _AXIS_COLS = ["eep", "age"]
 
     def __init__(self, path: str | Path):
@@ -372,7 +371,7 @@ class MISTModelGrid:
 
     @property
     def fitting_eep_range(self) -> tuple[int, int]:
-        """ZAMS (202) to TPAGB (808) — excludes PMS."""
+        """ZAMS (202) to TPAGB (808), excludes PMS."""
         return (max(202, int(self._eep_values[0])), min(808, int(self._eep_values[-1])))
 
     @property

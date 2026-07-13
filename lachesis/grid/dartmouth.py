@@ -110,7 +110,7 @@ def _parse_iso_file(path: Path) -> dict:
 class DartmouthModelGrid:
     """Dartmouth (DSEP) model grid.
 
-    Grid shape: (n_feh, n_age, n_eep, n_cols) — same interface as MIST/PARSEC.
+    Grid shape: (n_feh, n_age, n_eep, n_cols), same interface as MIST/PARSEC.
     """
 
     _COLUMNS = _COLUMNS
@@ -227,7 +227,7 @@ class DartmouthModelGrid:
 
     @property
     def fitting_eep_range(self) -> tuple[int, int]:
-        """Dartmouth's full range — its EEPs are already compact (2-279)."""
+        """Dartmouth's full range, its EEPs are already compact (2-279)."""
         return self.eep_range
 
     @property

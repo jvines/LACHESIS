@@ -1,14 +1,14 @@
-"""Filter name translation: pyphot ↔ MIST BC table.
+"""Filter name translation: pyphot <-> MIST BC table.
 
 LACHESIS uses pyphot filter names internally (compatible with ARIADNE).
 The BC table uses MIST's naming convention. This module translates between them.
 
 Bands without an extracted BC table yet are mapped here for forward
-compatibility — the Librarian retrieves all photometry, and the fitter
+compatibility, the Librarian retrieves all photometry, and the fitter
 silently skips bands that lack a BC table entry.
 """
 
-# pyphot name → bc_band_name (as it appears in the MIST BC table header)
+# pyphot name -> bc_band_name (as it appears in the MIST BC table header)
 PYPHOT_TO_BC = {
     # Gaia EDR3/DR3  [UBVRIplus]
     "Gaia_G": "Gaia_G_EDR3",
@@ -60,12 +60,12 @@ PYPHOT_TO_BC = {
     # GALEX  [GALEX BC system]
     "GALEX_FUV": "GALEX_FUV",
     "GALEX_NUV": "GALEX_NUV",
-    # Spitzer IRAC  [SPITZER BC system — not loaded by default]
+    # Spitzer IRAC  [SPITZER BC system, not loaded by default]
     "SPITZER_IRAC_36": "IRAC_3.6",
     "SPITZER_IRAC_45": "IRAC_4.5",
 }
 
-# Reverse mapping: BC table name → pyphot name
+# Reverse mapping: BC table name -> pyphot name
 BC_TO_PYPHOT = {v: k for k, v in PYPHOT_TO_BC.items()}
 
 # Effective wavelengths in microns (for display ordering)
@@ -94,7 +94,7 @@ FILTER_WAVELENGTH = {
     "SPITZER_IRAC_36": 3.550, "SPITZER_IRAC_45": 4.493,
 }
 
-# Catalog column → pyphot filter name (for external code; the Librarian
+# Catalog column -> pyphot filter name (for external code; the Librarian
 # uses its own CatalogDef registry for this mapping).
 CATALOG_TO_PYPHOT = {
     # Gaia DR3 (TAP column names)

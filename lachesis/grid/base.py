@@ -1,4 +1,4 @@
-"""Abstract grid interface — every isochrone grid implements this."""
+"""Abstract grid interface, every isochrone grid implements this."""
 
 from typing import Protocol, runtime_checkable
 
@@ -37,7 +37,7 @@ class IsochroneGrid(Protocol):
     def __call__(
         self, eep: float, log_age: float, feh: float
     ) -> dict[str, float]:
-        """Interpolate grid at (EEP, log_age, [Fe/H]) → observables."""
+        """Interpolate grid at (EEP, log_age, [Fe/H]) -> observables."""
         ...
 
 
@@ -69,7 +69,7 @@ def _mask_sentinel_plateaus(data, m_idx, eep_axis, min_run=5):
     """NaN-mask cells that are obviously sentinel-filled by the regrid.
 
     PARSEC's shipped HDF5 has many (Fe/H, age) slices where the EEP axis is
-    padded out with copies of the last valid mass value — long ``min_run+``
+    padded out with copies of the last valid mass value, long ``min_run+``
     runs of identical mass that aren't physical evolutionary tracks. They
     would otherwise contaminate the prior volume (zero |dM/dEEP| from the
     plateau, but inside the grid box, so the per-grid evidence integral
@@ -118,7 +118,7 @@ def _refresh_dm_deep_inplace(data, columns, eep_axis):
     plateaus that arise from regrid artifacts (notably ~37% of PARSEC's MS
     cells). We:
 
-    1. NaN-mask sentinel-filled trailing plateaus in initial_mass — these
+    1. NaN-mask sentinel-filled trailing plateaus in initial_mass, these
        are unphysical fills (e.g., 261.66 Msun stretched over hundreds of
        EEPs in PARSEC), and treating them as out-of-grid is more honest
        than treating them as in-grid-but-zero-gradient.
@@ -181,7 +181,7 @@ def _assert_axes_monotonic(path, **axes):
             raise ValueError(
                 f"{Path(path).name}: '{name}_values' axis is not strictly "
                 f"increasing (e.g. {np.round(a[:4], 3).tolist()}...); rebuild "
-                f"the grid with a sorted axis — the interpolator corrupts on "
+                f"the grid with a sorted axis, the interpolator corrupts on "
                 f"unsorted axes."
             )
 

@@ -1,4 +1,4 @@
-"""Tests for the Librarian — all network calls mocked."""
+"""Tests for the Librarian, all network calls mocked."""
 
 from unittest.mock import MagicMock, patch, PropertyMock
 
@@ -384,13 +384,13 @@ class TestGaiaParams:
         """Gaia GSP-Phot Teff must NOT enter the Librarian's _teff slot.
         The photometric SED constrains Teff via BC tables; injecting
         GSP-Phot as a separate observable double-counts the information
-        and pins to a ~1–5 K formal σ that hides ±100–200 K systematic
+        and pins to a ~1-5 K formal σ that hides ±100-200 K systematic
         scatter vs spectroscopy (Andrae+23).
         """
         main = _make_gaia_main_row(teff=5800.0, b_teff=5700.0, B_teff=5950.0)
         lib = self._make_lib(main)
         assert lib.teff is None, (
-            "GSP-Phot Teff leaked into Librarian._teff — would inject as "
+            "GSP-Phot Teff leaked into Librarian._teff, would inject as "
             "a tight log_Teff likelihood prior"
         )
 
@@ -639,7 +639,7 @@ class TestLibrarianIntegration:
         assert lib.gaia_id == 12345
         assert lib.parallax is not None
         # Gaia GSP-Phot Teff is intentionally NOT extracted (see
-        # test_gaia_gspphot_teff_not_extracted) — the photometric SED
+        # test_gaia_gspphot_teff_not_extracted), the photometric SED
         # constrains Teff via BC tables.
         assert lib.teff is None
         assert lib.radius is not None
