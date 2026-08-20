@@ -283,3 +283,123 @@ class TestFixedFehEndToEnd:
         prior = f._fitters["mist"].prior
         assert prior._feh_type == "fixed"
         assert prior.prior_transform(np.full(prior.ndim, 0.5))[2] == pytest.approx(0.21)
+
+
+class TestReviewRegressions:
+    """Regressions found by adversarial review of the degenerate-posterior fix.
+
+    Each of these was introduced BY that fix, so they are not covered by the
+    tests above.
+    """
+
+    @staticmethod
+    def _star(feh=-0.13, plx=20.0):
+        from lachesis.star import Star
+
+        star = Star("dummy", ra=0.0, dec=0.0,
+                    magnitudes={"Bessell_V": (10.0, 0.05)},
+                    plx=plx, plx_e=0.1, Av=0.1, verbose=False, offline=True)
+        star.teff, star.teff_e = 5750.0, 40.0
+        star.logg, star.logg_e = 4.42, 0.03
+        star.feh, star.feh_e = feh, None
+        star.feh_posterior = np.full(2000, feh)
+        star.external_posteriors = {}
+        return star
+
+    def _fitter(self, star, **kw):
+        from lachesis.fitter import Fitter
+
+        f = Fitter()
+        f.star = star
+        f.grids = kw.pop("grids", ["mist"])
+        f.bma = kw.pop("bma", False)
+        f.verbose = False
+        for k, v in kw.items():
+            setattr(f, k, v)
+        return f
+
+    def test_single_metallicity_grid_is_still_rail_dropped(self):
+        """The rail bypass must key on the prior TYPE, not on the column
+        spread. geneva's feh axis is the single point [0.0], so it produces a
+        constant column through a zero-width UNIFORM box and is railed by
+        construction. Keying on np.ptp let it into the BMA and put a delta
+        atom at exactly 0.0 into the combined [Fe/H] posterior."""
+        if FULL_GRID_H5 is None:
+            pytest.skip("MIST grid not available")
+        star = self._star()
+        star.feh, star.feh_e = None, None
+        star.feh_posterior = None
+        f = self._fitter(star, grids=["mist", "geneva"], bma=True, n_grid_jobs=1)
+        f.setup = ["dynesty", 60, 3.0, "multi", "rwalk", 4, False]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            f.initialize()
+            res = f.fit_bma()
+        assert "geneva" in dict(f.dropped_grids)
+        pn = f._fitters[f._grids[0]].prior.param_names
+        feh = np.asarray(res.samples)[:, pn.index("feh")]
+        assert float(np.mean(feh == 0.0)) == 0.0
+
+    def test_coverage_drop_is_recorded_and_warns_when_quiet(self):
+        """The drop now fires on the ARIADNE path, so a batch run (verbose
+        False) must not lose grids without a warning or a record."""
+        if FULL_GRID_H5 is None:
+            pytest.skip("MIST grid not available")
+        star = self._star(feh=-1.60)
+        f = self._fitter(star, grids=["mist", "yapsi"], bma=True)
+        assert f.verbose is False
+        with pytest.warns(RuntimeWarning, match="Auto-dropped"):
+            f.initialize()
+        assert "yapsi" in dict(f.dropped_grids)
+        assert "yapsi" not in f.grids
+
+    def test_local_bubble_with_a_fixed_upstream_av_is_not_blocked(self):
+        """The degenerate-prior raise fired before the Local Bubble drop, so a
+        nearby star with a fixed upstream Av aborted on a prior the next block
+        would have deleted anyway."""
+        if FULL_GRID_H5 is None:
+            pytest.skip("MIST grid not available")
+        star = self._star(plx=20.0)  # 50 pc, inside the bubble
+        star.external_posteriors = {"Av": np.full(2000, 0.0)}
+        f = self._fitter(star)
+        with pytest.warns(RuntimeWarning, match="Local Bubble"):
+            f.initialize()
+        assert "Av" not in f._fitters["mist"]._external_kdes
+
+    def test_short_but_spread_external_prior_warns_rather_than_aborting(self):
+        """Too few samples is a different failure from fixed-upstream, with a
+        different remedy, so it must not borrow that message or abort."""
+        if FULL_GRID_H5 is None:
+            pytest.skip("MIST grid not available")
+        star = self._star()
+        star.external_posteriors = {
+            "Teff": np.array([5700., 5730., 5750., 5770., 5800.])}
+        f = self._fitter(star)
+        with pytest.warns(RuntimeWarning, match="too few"):
+            f.initialize()
+        assert "Teff" not in f._fitters["mist"]._external_kdes
+
+    def test_constant_external_prior_still_raises_by_name(self):
+        from lachesis.error import InputError
+
+        if FULL_GRID_H5 is None:
+            pytest.skip("MIST grid not available")
+        star = self._star()
+        star.external_posteriors = {"Teff": np.full(2000, 5750.0)}
+        f = self._fitter(star)
+        with pytest.raises(InputError, match="constant at 5750"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                f.initialize()
+
+    def test_show_priors_does_not_report_a_delta_as_uniform(self, capsys):
+        if FULL_GRID_H5 is None:
+            pytest.skip("MIST grid not available")
+        f = self._fitter(self._star())
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            f.initialize()
+        f.show_priors()
+        out = capsys.readouterr().out
+        assert "FIXED at -0.1300" in out
+        assert "U(-2.00, 0.50)" not in out

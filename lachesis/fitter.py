@@ -513,9 +513,28 @@ class Fitter:
         if self._star.external_posteriors:
             from scipy.stats import gaussian_kde
             for param, samples in self._star.external_posteriors.items():
+                if param == "Av" and av_range is None:
+                    # An Av prior with no sampled Av is unsatisfiable. Inside
+                    # the Local Bubble av_range is None, so 'Av' is not in the
+                    # parameter vector and the sampler reads it back as None,
+                    # which returns -inf for EVERY proposal. Verified end to
+                    # end: the fit dies in dynesty's live-point initialisation
+                    # and is misreported as a grid-coverage failure. The Av = 0
+                    # assumption supersedes the upstream prior. Reconcile this
+                    # BEFORE the spread test below, or a fixed upstream Av
+                    # aborts the run on a prior we were going to delete anyway.
+                    warnings.warn(
+                        f"{self._star.starname} is inside the Local Bubble "
+                        f"(d <= 70 pc), where Av is fixed at 0 and not "
+                        f"sampled. Dropping the upstream Av prior, which "
+                        f"cannot be applied to a parameter that is not being "
+                        f"fitted.",
+                        RuntimeWarning,
+                    )
+                    continue
                 samples = np.asarray(samples, dtype=float).ravel()
                 finite = samples[np.isfinite(samples)]
-                if finite.size < 10 or float(np.ptp(finite)) == 0.0:
+                if float(np.ptp(finite)) == 0.0 and finite.size:
                     # A constant column means the parameter was FIXED upstream.
                     # Skipping it silently deleted a whole constraint from the
                     # likelihood without a word, and the surviving-priors line
@@ -526,15 +545,25 @@ class Fitter:
                     # surfaces as dynesty finding no valid log-likelihood and
                     # is reported as the star lying outside every grid.
                     raise InputError(
-                        f"The external prior for '{param}' has no spread "
-                        f"({finite.size} finite sample(s), range "
-                        f"{float(np.ptp(finite)):.3g}); it was almost certainly "
-                        f"FIXED in the upstream fit. A delta constraint has "
-                        f"zero measure and makes every likelihood evaluation "
-                        f"-inf. Re-run the upstream fit with '{param}' free, "
-                        f"or remove it with "
+                        f"The external prior for '{param}' is constant at "
+                        f"{float(finite[0]):.6g} over {finite.size} sample(s); "
+                        f"it was FIXED in the upstream fit. A delta constraint "
+                        f"has zero measure and makes every likelihood "
+                        f"evaluation -inf. Re-run the upstream fit with "
+                        f"'{param}' free, or remove it with "
                         f"star.external_posteriors.pop({param!r})."
                     )
+                if finite.size < 10:
+                    # A different failure with a different remedy, so do not
+                    # share the message above. Too few samples to estimate a
+                    # density from; skip, but not in silence.
+                    warnings.warn(
+                        f"The external prior for '{param}' has only "
+                        f"{finite.size} finite sample(s), too few to build a "
+                        f"KDE from. It is NOT constraining this fit.",
+                        RuntimeWarning,
+                    )
+                    continue
                 kde = gaussian_kde(finite)
                 lo, hi = float(finite.min()), float(finite.max())
                 std = float(np.std(finite))
@@ -544,21 +573,6 @@ class Fitter:
                 log_pdf = np.log(np.maximum(kde(grid), 1e-300))
                 external_kdes[param] = (grid, log_pdf)
 
-            # An Av prior with no sampled Av is unsatisfiable. Inside the Local
-            # Bubble av_range is None, so 'Av' is not in the parameter vector
-            # and the sampler reads it back as None, which returns -inf for
-            # EVERY proposal. Verified end to end: the fit dies in dynesty's
-            # live-point initialisation and is misreported as a grid-coverage
-            # failure. The Av = 0 assumption supersedes the upstream prior.
-            if av_range is None and "Av" in external_kdes:
-                del external_kdes["Av"]
-                warnings.warn(
-                    f"{self._star.starname} is inside the Local Bubble "
-                    f"(d <= 70 pc), where Av is fixed at 0 and not sampled. "
-                    f"Dropping the upstream Av prior, which cannot be applied "
-                    f"to a parameter that is not being fitted.",
-                    RuntimeWarning,
-                )
             if self._verbose and external_kdes:
                 print(f"\t\t\t External priors (KDE): {', '.join(external_kdes)}")
 
@@ -607,13 +621,23 @@ class Fitter:
                     dropped.append((name, g_lo, g_hi))
                 else:
                     kept.append(name)
-            if dropped and self._verbose:
+            if dropped:
+                # Not gated on verbose, and recorded. This test used to run
+                # only for a Gaussian prior, so it almost never fired; now
+                # that it covers the ARIADNE path it fires on ordinary
+                # pipeline stars, and a batch run must not lose grids from
+                # the BMA without a warning or a provenance record.
+                self.dropped_grids.extend(
+                    (n, "[Fe/H] axis does not cover the prior centre")
+                    for n, _lo, _hi in dropped
+                )
                 warnings.warn(
                     f"Auto-dropped {len(dropped)} grid(s) from BMA whose "
                     f"[Fe/H] axis does not contain the star's [Fe/H] prior "
                     f"({feh_desc}): "
                     + ", ".join(f"{n} ([{lo:.2f}, {hi:.2f}])"
-                                for n, lo, hi in dropped)
+                                for n, lo, hi in dropped),
+                    RuntimeWarning,
                 )
             if not kept:
                 raise InputError(
@@ -740,6 +764,13 @@ class Fitter:
                     print(colored(f"{t3}{'feh':12s}  Morton (2-Gaussian disk + halo)", c))
                 elif p._feh_type == "rave":
                     print(colored(f"{t3}{'feh':12s}  RAVE DR5 N(-0.125, 0.234)", c))
+                elif p._feh_type == "fixed":
+                    print(colored(f"{t3}{'feh':12s}  FIXED at {p._feh_value:+.4f}", c))
+                elif p.feh_hi <= p.feh_lo:
+                    # Single-metallicity grid: a zero-width box is a delta,
+                    # not the wide uniform the else branch would print.
+                    print(colored(f"{t3}{'feh':12s}  FIXED at {p.feh_lo:+.4f} "
+                                  f"(single-metallicity grid)", c))
                 else:
                     print(colored(f"{t3}{'feh':12s}  U({p.feh_lo:.2f}, {p.feh_hi:.2f})", c))
             elif name == "distance":
@@ -948,11 +979,21 @@ class Fitter:
                 g_hi = float(grid.feh_values[-1])
                 pn = res.get("param_names") or self._fitters[name].prior.param_names
                 fe = np.asarray(res["samples"])[:, pn.index("feh")]
-                if float(np.ptp(fe)) == 0.0:
+                feh_type = getattr(
+                    self._fitters[name].prior, "_feh_type", "uniform")
+                if feh_type == "fixed":
                     # [Fe/H] was fixed, so there is no posterior to rail. The
                     # test is a step function on a constant column, and a fixed
                     # value that happens to sit within tol of an axis edge would
                     # drop an otherwise fine grid (tol is 0.09 dex on MIST).
+                    #
+                    # Key this on the prior TYPE, not on np.ptp(fe) == 0. A
+                    # single-metallicity grid (geneva, bhac15: feh_values is
+                    # the single point [0.0]) also yields a constant column,
+                    # but via a zero-width UNIFORM box, and such a grid is
+                    # railed by construction. Bypassing it on spread alone let
+                    # geneva into the default BMA and put a delta atom at
+                    # exactly 0.0 into the combined [Fe/H] posterior.
                     rail_kept[name] = res
                     continue
                 tol = max(0.03, 0.02 * (g_hi - g_lo))
