@@ -396,6 +396,18 @@ class Fitter:
         if used_bands:
             self._bc_table.set_active_bands(used_bands)
 
+        unusable = self._star.unusable_observables()
+        if unusable:
+            verb = "carries" if len(unusable) == 1 else "carry"
+            warnings.warn(
+                f"{self._star.starname}: "
+                + ", ".join(unusable)
+                + f" {verb} no usable uncertainty, so it is NOT constraining "
+                "this fit. A quantity fixed in the upstream fit enters through "
+                "its prior instead; otherwise supply an uncertainty.",
+                RuntimeWarning,
+            )
+
         # Parse priors (matching ARIADNE's prior_setup dict pattern)
         ps = self._prior_setup or {}
 

@@ -1150,6 +1150,24 @@ class Star:
             and np.isfinite(err) and err > 0
         )
 
+    def unusable_observables(self) -> list[str]:
+        """Quantities that are set but carry no usable uncertainty.
+
+        These are silently absent from `observed`, so report them once at fit
+        setup rather than letting a constraint disappear without a word.
+        """
+        pairs = (
+            ("Teff", self.teff, self.teff_e),
+            ("logg", self.logg, self.logg_e),
+            ("[Fe/H]", self.feh, self.feh_e),
+            ("luminosity", self.luminosity, self.luminosity_e),
+            ("radius", self.radius, self.radius_e),
+        )
+        return [
+            name for name, val, err in pairs
+            if val is not None and not self._usable(val, err)
+        ]
+
     @property
     def observed(self) -> dict[str, float]:
         """Observable dict for the likelihood, translated to grid column names."""
