@@ -176,16 +176,22 @@ Cite the grids you use. The default BMA set uses MIST, PARSEC, Dartmouth, BaSTI,
 
 ### Geneva (if used)
 
+The shipped Geneva cube is built by `scripts/build_geneva_mowlavi.py` from the
+VizieR catalogue J/A+A/541/A41, the non-rotating low/intermediate-mass grid
+(Z = 0.006 to 0.040, M = 0.5 to 3.5 Msun). Cite Mowlavi+ 2012, not the
+Ekstroem+ 2012 rotating grid, which covers a different mass and metallicity
+range and is not what LACHESIS ships.
+
 ```
-@ARTICLE{2012A&A...537A.146E,
-       author = {{Ekstr{\"o}m}, Sylvia and {Georgy}, Cyril and {Eggenberger}, Patrick and {Meynet}, Georges and {Mowlavi}, Nami and {Wyttenbach}, Aur{\'e}lien and {Granada}, Anahí and {Decressin}, Thibaut and {Hirschi}, Raphael and {Frischknecht}, Urs and {Charbonnel}, Corinne and {Maeder}, Andr{\'e}},
-        title = "{Grids of stellar models with rotation. I. Models from 0.8 to 120 M$_\odot$ at solar metallicity (Z = 0.014)}",
+@ARTICLE{2012A&A...541A..41M,
+       author = {{Mowlavi}, N. and {Eggenberger}, P. and {Meynet}, G. and {Ekstr{\"o}m}, S. and {Georgy}, C. and {Maeder}, A. and {Charbonnel}, C. and {Eyer}, L.},
+        title = "{Stellar mass and age determinations. I. Grids of stellar models from Z = 0.006 to 0.04 and M = 0.5 to 3.5 M$_\odot$}",
       journal = {\aap},
          year = 2012,
-       volume = {537},
-          eid = {A146},
-          doi = {10.1051/0004-6361/201117751},
-       adsurl = {https://ui.adsabs.harvard.edu/abs/2012A&A...537A.146E},
+       volume = {541},
+          eid = {A41},
+          doi = {10.1051/0004-6361/201117749},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2012A&A...541A..41M},
 }
 ```
 

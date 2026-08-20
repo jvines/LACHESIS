@@ -4,6 +4,11 @@ Parses individual isochrone files from the Geneva stellar evolution group.
 Only Z=0.014 (solar) precomputed isochrones are available from the server;
 other metallicities only have evolutionary tracks.
 
+NOTE. That applies to this SYCLIST .dat parser. The cube that lachesis-grids
+actually ships is built by scripts/build_geneva_mowlavi.py from the
+non-rotating Mowlavi+ 2012 tracks (VizieR J/A+A/541/A41), which do span six
+metallicities, and is loaded through from_hdf5 rather than through __init__.
+
 Each file is a single (Z, age) isochrone. No EEPs are provided, mass-sorted row index is used as a proxy EEP.
 
 Grid shape: (n_feh, n_age, n_eep, n_cols).

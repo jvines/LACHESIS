@@ -128,3 +128,59 @@ class TestNonFiniteEvidence:
         )
         assert len(result.samples) > 0
         assert np.all(np.isfinite(result.weights))
+
+
+class TestBMAForbiddenGrids:
+    """Grids whose coverage is too narrow for a common-scale evidence
+    comparison must be refused in BMA mode.
+
+    README documented Geneva as excluded from the start, but nothing enforced
+    it and it shipped in the default grid list, where the a-posteriori [Fe/H]
+    rail drop removed it by accident.
+    """
+
+    @staticmethod
+    def _fitter(grids, bma=True):
+        from lachesis.fitter import Fitter
+        from lachesis.star import Star
+
+        star = Star("dummy", ra=0.0, dec=0.0,
+                    magnitudes={"Bessell_V": (10.0, 0.05)},
+                    plx=10.0, plx_e=0.1, Av=0.1, feh=-0.1, feh_e=0.05,
+                    verbose=False, offline=True)
+        star.teff, star.teff_e = 5750.0, 40.0
+        f = Fitter()
+        f.star = star
+        f.grids = grids
+        f.bma = bma
+        f.verbose = False
+        return f
+
+    @pytest.mark.parametrize("grid", ["geneva", "bhac15", "starevol"])
+    def test_forbidden_in_bma(self, grid):
+        from lachesis.error import InputError
+
+        f = self._fitter(["mist", grid])
+        with pytest.raises(InputError, match="BMA mode"):
+            f.initialize()
+
+    @pytest.mark.parametrize("grid", ["geneva", "bhac15", "starevol"])
+    def test_allowed_as_a_single_grid_fit(self, grid):
+        """The exclusion is about BMA, not about the grid being unusable."""
+        from lachesis.error import InputError
+
+        f = self._fitter([grid], bma=False)
+        try:
+            f.initialize()
+        except InputError as e:
+            assert "BMA mode" not in str(e)
+        except Exception:
+            pytest.skip(f"{grid} grid data not available")
+
+    def test_default_grid_list_is_bma_safe(self):
+        """The defaults must not trip the guard the moment a user sets
+        bma = True, which is what the README example does."""
+        from lachesis.fitter import Fitter
+
+        defaults = set(Fitter()._grids)
+        assert not (defaults & {"geneva", "bhac15", "starevol"})

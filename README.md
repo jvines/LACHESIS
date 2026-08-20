@@ -349,8 +349,8 @@ comparisons, but they're the right tool for their target populations:
 
 - **BHAC15** (Baraffe+ 2015): M dwarfs, 0.01–1.4 Msun, solar metallicity.
   See `test_bhac15.py` for a Proxima Centauri example.
-- **Geneva** (Ekstroem+ 2012): massive/intermediate-mass tracks, solar
-  metallicity only. See `test_geneva.py`.
+- **Geneva** (Mowlavi+ 2012): non-rotating low/intermediate-mass grid,
+  0.5-3.5 Msun. See `test_geneva.py`.
 - **STAREVOL** (Amard+ 2019): includes stellar rotation (Vini) as a 6th
   sampled parameter. See `test_starevol.py`.
 
@@ -366,14 +366,16 @@ fit if you just want the posterior from one specific model.
 | **Dartmouth** | -2.5 to +0.5 | 9.0–10.1 | 2–279 | Yes | Native DSEP EEPs |
 | **BaSTI** | -3.2 to +0.4 | 7.9–10.2 | 1–2100 | Yes | Mass-index EEPs |
 | **YAPSI** | -0.75 to +0.55 | 8.0–10.2 | 1–71 | Yes | Yale-Potsdam |
-| **Geneva** | 0.0 only | 6.0–10.1 | 1–363 | No | Solar metallicity only |
+| **Geneva** | -0.33 to +0.54 | 7.5–10.2 | 0–600 | No | 0.5–3.5 Msun only |
 | **BHAC15** | 0.0 only | 6.0–10.0 | 1–30 | No | M dwarfs, 0.01–1.4 Msun |
 | **STAREVOL** | -2.14 to +0.41 | 7.0–10.1 | 1–422 | No | Includes rotation (Vini) |
 
-Geneva, BHAC15, and STAREVOL are excluded from BMA because they have limited
-parameter coverage (single metallicity, rotation parameter) that would bias the
-evidence comparison. They work well as standalone fits for their target
-populations.
+Geneva, BHAC15, and STAREVOL are excluded from BMA because their parameter
+coverage is too narrow to put their evidence on a common scale with the rest:
+BHAC15 is single-metallicity, STAREVOL carries a rotation parameter the others
+do not, and Geneva spans only 0.5-3.5 Msun and log t 7.5-10.2. The exclusion is
+enforced in `Fitter.initialize`. They work well as standalone fits for their
+target populations.
 
 ## Visualization
 

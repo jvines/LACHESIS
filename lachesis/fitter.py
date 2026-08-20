@@ -148,7 +148,7 @@ class Fitter:
 
     def __init__(self):
         self._star = None
-        self._grids = ["mist", "parsec", "dartmouth", "basti", "yapsi", "geneva"]
+        self._grids = ["mist", "parsec", "dartmouth", "basti", "yapsi"]
         self._bma = False
         self._binary = False
         self._verbose = True
@@ -353,15 +353,23 @@ class Fitter:
             raise InputError("No star set. Assign f.star = Star(...) first.")
         self.dropped_grids = []
 
-        # BMA guardrails: BHAC15 and STAREVOL cannot participate in BMA
-        _BMA_FORBIDDEN = {"bhac15", "starevol"}
+        # BMA guardrails: grids whose coverage is too narrow to put their
+        # evidence on a common scale with the others. Geneva is here because
+        # Mowlavi+ 2012 spans only 0.5-3.5 Msun and log t 7.5-10.2, so it
+        # cannot represent most of the parameter space the other five cover;
+        # README has documented it as excluded since the start, but nothing
+        # enforced it and it shipped in the default grid list, where an
+        # accident of the a-posteriori [Fe/H] rail drop was removing it.
+        _BMA_FORBIDDEN = {"bhac15", "starevol", "geneva"}
         if self._bma:
             forbidden = _BMA_FORBIDDEN & set(self._grids)
             if forbidden:
                 raise InputError(
-                    f"Cannot use {forbidden} in BMA mode. "
-                    f"BHAC15 (single metallicity) and STAREVOL (rotation parameter) "
-                    f"are single-grid fit only."
+                    f"Cannot use {forbidden} in BMA mode. BHAC15 (single "
+                    f"metallicity), STAREVOL (rotation parameter) and Geneva "
+                    f"(0.5-3.5 Msun only) have parameter coverage too narrow "
+                    f"for a common-scale evidence comparison, and are "
+                    f"single-grid fit only."
                 )
 
         # Parse setup list
