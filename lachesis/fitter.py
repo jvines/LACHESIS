@@ -51,9 +51,11 @@ def _log_box(lo, hi):
     the common-scale evidence correction and is identical across grids. Taking
     log(0) instead put -inf into that grid's log-evidence, which propagates
     into the BMA as NaN weights and an empty combined posterior that the run
-    reports as a success. Single-metallicity grids (geneva, bhac15) clamp to a
-    zero-width [Fe/H] box, and a feh_range narrowed past a grid's axis inverts
-    the interval outright.
+    reports as a success. A single-metallicity grid clamps to a zero-width
+    [Fe/H] box (bhac15 in every lachesis-grids to date, and geneva before
+    0.0.7, which gave it six [Fe/H] points), a user-set feh_range of (v, v)
+    does the same, and a feh_range narrowed past a grid's axis inverts the
+    interval outright.
     """
     w = hi - lo
     if not (w > 0) or not np.isfinite(w):
@@ -988,12 +990,12 @@ class Fitter:
                     # drop an otherwise fine grid (tol is 0.09 dex on MIST).
                     #
                     # Key this on the prior TYPE, not on np.ptp(fe) == 0. A
-                    # single-metallicity grid (geneva, bhac15: feh_values is
-                    # the single point [0.0]) also yields a constant column,
-                    # but via a zero-width UNIFORM box, and such a grid is
-                    # railed by construction. Bypassing it on spread alone let
-                    # geneva into the default BMA and put a delta atom at
-                    # exactly 0.0 into the combined [Fe/H] posterior.
+                    # zero-width UNIFORM box yields a constant column too, from
+                    # a single-metallicity grid or a user-set feh_range of
+                    # (v, v), and such a grid is railed by construction.
+                    # Bypassing on spread alone let it into the BMA and put a
+                    # delta atom at that value into the combined [Fe/H]
+                    # posterior.
                     rail_kept[name] = res
                     continue
                 tol = max(0.03, 0.02 * (g_hi - g_lo))

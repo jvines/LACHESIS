@@ -318,27 +318,51 @@ class TestReviewRegressions:
             setattr(f, k, v)
         return f
 
-    def test_single_metallicity_grid_is_still_rail_dropped(self):
+    def test_zero_width_uniform_box_is_not_a_fixed_prior(self):
         """The rail bypass must key on the prior TYPE, not on the column
-        spread. geneva's feh axis is the single point [0.0], so it produces a
-        constant column through a zero-width UNIFORM box and is railed by
-        construction. Keying on np.ptp let it into the BMA and put a delta
-        atom at exactly 0.0 into the combined [Fe/H] posterior."""
+        spread.
+
+        A zero-width [Fe/H] box produces a constant column too, but through a
+        UNIFORM prior rather than a delta, and such a grid is railed by
+        construction. Deliberately constructed with feh_range rather than by
+        naming a single-metallicity grid: which grids are single-metallicity
+        depends on the installed lachesis-grids (geneva was solar-only before
+        0.0.7 and has six [Fe/H] points from 0.0.7 on), so a grid-name-based
+        test asserts the environment, not the behaviour.
+        """
         if FULL_GRID_H5 is None:
             pytest.skip("MIST grid not available")
         star = self._star()
         star.feh, star.feh_e = None, None
         star.feh_posterior = None
-        f = self._fitter(star, grids=["mist", "geneva"], bma=True, n_grid_jobs=1)
-        f.setup = ["dynesty", 60, 3.0, "multi", "rwalk", 4, False]
+        f = self._fitter(star, grids=["mist"])
+        f.feh_range = (0.0, 0.0)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             f.initialize()
-            res = f.fit_bma()
-        assert "geneva" in dict(f.dropped_grids)
-        pn = f._fitters[f._grids[0]].prior.param_names
-        feh = np.asarray(res.samples)[:, pn.index("feh")]
-        assert float(np.mean(feh == 0.0)) == 0.0
+        prior = f._fitters["mist"].prior
+        assert prior.feh_hi == prior.feh_lo
+        # The discriminator: a zero-width box is uniform, never "fixed", so
+        # the rail bypass does not fire for it.
+        assert prior._feh_type == "uniform"
+        assert prior.prior_transform(np.full(prior.ndim, 0.5))[2] == 0.0
+        # And it must not make the log-prior or the evidence box infinite.
+        assert np.isfinite(prior.log_prior(
+            400, 9.5, 0.0, initial_mass=1.0, dm_deep=0.01,
+            distance=prior._dist_mean if prior._has_distance else None))
+        from lachesis.fitter import _log_box
+        assert _log_box(prior.feh_lo, prior.feh_hi) == 0.0
+
+    def test_rail_bypass_keys_on_prior_type(self):
+        """A genuinely fixed [Fe/H] IS bypassed, so the two constant-column
+        sources are distinguished."""
+        if FULL_GRID_H5 is None:
+            pytest.skip("MIST grid not available")
+        f = self._fitter(self._star())
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            f.initialize()
+        assert f._fitters["mist"].prior._feh_type == "fixed"
 
     def test_coverage_drop_is_recorded_and_warns_when_quiet(self):
         """The drop now fires on the ARIADNE path, so a batch run (verbose
