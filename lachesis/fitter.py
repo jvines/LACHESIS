@@ -44,6 +44,23 @@ def _bma_grid_worker(name):
         return name, e
 
 
+def _log_box(lo, hi):
+    """log of a uniform prior's width, treating a zero width as a delta.
+
+    A dimension of zero width carries no prior volume, so it contributes 0 to
+    the common-scale evidence correction and is identical across grids. Taking
+    log(0) instead put -inf into that grid's log-evidence, which propagates
+    into the BMA as NaN weights and an empty combined posterior that the run
+    reports as a success. Single-metallicity grids (geneva, bhac15) clamp to a
+    zero-width [Fe/H] box, and a feh_range narrowed past a grid's axis inverts
+    the interval outright.
+    """
+    w = hi - lo
+    if not (w > 0) or not np.isfinite(w):
+        return 0.0
+    return float(np.log(w))
+
+
 def _is_zero_support_error(exc) -> bool:
     """True when a grid fit died because no point in the prior volume has a
     finite likelihood, i.e. the star lies outside the grid's coverage (e.g.
@@ -139,7 +156,13 @@ class Fitter:
         self._av_law = "fitzpatrick"
         self._imf = "chabrier"
         self._eep_range = (200, 808)
-        self._age_range = (8.0, 10.3)
+        # Upper bound: age of the universe (13.8 Gyr, Planck 2018). Also
+        # equalizes the age support across grids with different native
+        # ceilings (MIST 10.30, PARSEC 10.25, DSEP/BaSTI/YaPSI 10.176), so
+        # the common-measure evidence correction cannot reward a grid for
+        # carrying isochrones into the unphysical old regime. Override via
+        # the age_range setter for e.g. grid-systematics experiments.
+        self._age_range = (8.0, 10.1399)
         self._feh_range = (-2.0, 0.5)
         self._bc_system = None
         self._parsed_setup = None
@@ -386,15 +409,40 @@ class Fitter:
         if feh_cfg and isinstance(feh_cfg, tuple):
             if feh_cfg[0] == "normal":
                 feh_prior = ("gaussian", feh_cfg[1], feh_cfg[2])
+            elif feh_cfg[0] == "fixed":
+                feh_prior = ("fixed", float(feh_cfg[1]))
+            elif feh_cfg[0] == "uniform":
+                feh_prior = None
+                self._feh_range = (float(feh_cfg[1]), float(feh_cfg[2]))
             elif feh_cfg[0] == "morton":
                 feh_prior = ("morton",)
             elif feh_cfg[0] == "rave":
                 feh_prior = ("rave",)
+            elif feh_cfg[0] == "default":
+                # Explicit "no override": fall through to the ARIADNE
+                # posterior / spectroscopic / uniform chain below.
+                feh_prior = None
+            else:
+                # Silently ignoring an unrecognised head sent the user's
+                # explicit prior straight past every branch and on to the
+                # ARIADNE KDE default, i.e. it accepted the instruction and
+                # did nothing with it. ARIADNE's own key here is 'z' and it
+                # accepts 'fixed', so the spelling carries over.
+                raise InputError(
+                    f"Unrecognised [Fe/H] prior {feh_cfg[0]!r}. Use "
+                    f"('normal', mu, sigma), ('fixed', value), "
+                    f"('uniform', lo, hi), ('morton',), ('rave',) or ('default',)."
+                )
         elif feh_cfg and isinstance(feh_cfg, str):
             if feh_cfg == "morton":
                 feh_prior = ("morton",)
             elif feh_cfg == "rave":
                 feh_prior = ("rave",)
+            elif feh_cfg != "default":
+                raise InputError(
+                    f"Unrecognised [Fe/H] prior {feh_cfg!r}. Use 'morton', "
+                    f"'rave', 'default', or a tuple form."
+                )
         if feh_prior is None:
             if getattr(self._star, "feh_posterior", None) is not None:
                 feh_prior = ("kde", self._star.feh_posterior)
@@ -452,22 +500,53 @@ class Fitter:
         external_kdes = {}
         if self._star.external_posteriors:
             from scipy.stats import gaussian_kde
-            from numpy.linalg import LinAlgError
             for param, samples in self._star.external_posteriors.items():
-                if len(samples) < 10:
-                    continue
-                try:
-                    kde = gaussian_kde(samples)
-                except LinAlgError:
-                    # Degenerate samples (e.g. zero variance); skip silently.
-                    continue
-                lo, hi = float(samples.min()), float(samples.max())
-                std = float(np.std(samples))
+                samples = np.asarray(samples, dtype=float).ravel()
+                finite = samples[np.isfinite(samples)]
+                if finite.size < 10 or float(np.ptp(finite)) == 0.0:
+                    # A constant column means the parameter was FIXED upstream.
+                    # Skipping it silently deleted a whole constraint from the
+                    # likelihood without a word, and the surviving-priors line
+                    # below lists only what was kept, so nothing showed it.
+                    # Tabulating it anyway is worse: lo == hi makes pad zero,
+                    # the 2048-node grid collapses to a single point, and the
+                    # sampler's range check then rejects every proposal, which
+                    # surfaces as dynesty finding no valid log-likelihood and
+                    # is reported as the star lying outside every grid.
+                    raise InputError(
+                        f"The external prior for '{param}' has no spread "
+                        f"({finite.size} finite sample(s), range "
+                        f"{float(np.ptp(finite)):.3g}); it was almost certainly "
+                        f"FIXED in the upstream fit. A delta constraint has "
+                        f"zero measure and makes every likelihood evaluation "
+                        f"-inf. Re-run the upstream fit with '{param}' free, "
+                        f"or remove it with "
+                        f"star.external_posteriors.pop({param!r})."
+                    )
+                kde = gaussian_kde(finite)
+                lo, hi = float(finite.min()), float(finite.max())
+                std = float(np.std(finite))
                 # Pad ≥5σ so the KDE tails aren't clipped to a hard wall.
                 pad = max(0.1 * (hi - lo), 5.0 * std)
                 grid = np.linspace(lo - pad, hi + pad, 2048)
                 log_pdf = np.log(np.maximum(kde(grid), 1e-300))
                 external_kdes[param] = (grid, log_pdf)
+
+            # An Av prior with no sampled Av is unsatisfiable. Inside the Local
+            # Bubble av_range is None, so 'Av' is not in the parameter vector
+            # and the sampler reads it back as None, which returns -inf for
+            # EVERY proposal. Verified end to end: the fit dies in dynesty's
+            # live-point initialisation and is misreported as a grid-coverage
+            # failure. The Av = 0 assumption supersedes the upstream prior.
+            if av_range is None and "Av" in external_kdes:
+                del external_kdes["Av"]
+                warnings.warn(
+                    f"{self._star.starname} is inside the Local Bubble "
+                    f"(d <= 70 pc), where Av is fixed at 0 and not sampled. "
+                    f"Dropping the upstream Av prior, which cannot be applied "
+                    f"to a parameter that is not being fitted.",
+                    RuntimeWarning,
+                )
             if self._verbose and external_kdes:
                 print(f"\t\t\t External priors (KDE): {', '.join(external_kdes)}")
 
@@ -478,8 +557,27 @@ class Fitter:
         # feh_prior = N(-1.47, 0.07). The clamp on grid_feh_lo/hi below
         # narrows the prior interval but cannot rescue a Gaussian prior
         # whose ±3σ window is entirely outside the grid axis.
-        if feh_prior is not None and feh_prior[0] == "gaussian":
-            mu, sig = float(feh_prior[1]), float(feh_prior[2])
+        # The test needs a central value, not a prior type. Gating it on
+        # "gaussian" meant it never ran on the default ARIADNE path, which
+        # produces ("kde", samples), so the protection it was written to give
+        # was absent exactly where it is needed most. A fixed [Fe/H] outside a
+        # grid's axis is the same failure with none of the slack.
+        feh_centre = None
+        if feh_prior is not None:
+            if feh_prior[0] == "gaussian":
+                feh_centre = float(feh_prior[1])
+                feh_desc = f"N({feh_centre:.2f}, {float(feh_prior[2]):.2f})"
+            elif feh_prior[0] == "fixed":
+                feh_centre = float(feh_prior[1])
+                feh_desc = f"fixed at {feh_centre:+.2f}"
+            elif feh_prior[0] == "kde":
+                _fs = np.asarray(feh_prior[1], dtype=float).ravel()
+                _fs = _fs[np.isfinite(_fs)]
+                if _fs.size:
+                    feh_centre = float(np.median(_fs))
+                    feh_desc = f"posterior median {feh_centre:+.2f}"
+        if feh_centre is not None:
+            mu = feh_centre
             dropped = []
             kept = []
             for name in self._grids:
@@ -501,15 +599,15 @@ class Fitter:
                 warnings.warn(
                     f"Auto-dropped {len(dropped)} grid(s) from BMA whose "
                     f"[Fe/H] axis does not contain the star's [Fe/H] prior "
-                    f"centre N({mu:.2f}, {sig:.2f}): "
+                    f"({feh_desc}): "
                     + ", ".join(f"{n} ([{lo:.2f}, {hi:.2f}])"
                                 for n, lo, hi in dropped)
                 )
             if not kept:
                 raise InputError(
                     f"All grids have [Fe/H] coverage incompatible with the "
-                    f"star's [Fe/H] prior N({mu:.2f}, {sig:.2f}). Verify the "
-                    f"prior is plausible for the star."
+                    f"star's [Fe/H] prior ({feh_desc}). Verify the prior is "
+                    f"plausible for the star."
                 )
             if self._bma and len(kept) < 2:
                 # BMA needs ≥2 grids; if only one survives the feh filter,
@@ -838,12 +936,33 @@ class Fitter:
                 g_hi = float(grid.feh_values[-1])
                 pn = res.get("param_names") or self._fitters[name].prior.param_names
                 fe = np.asarray(res["samples"])[:, pn.index("feh")]
+                if float(np.ptp(fe)) == 0.0:
+                    # [Fe/H] was fixed, so there is no posterior to rail. The
+                    # test is a step function on a constant column, and a fixed
+                    # value that happens to sit within tol of an axis edge would
+                    # drop an otherwise fine grid (tol is 0.09 dex on MIST).
+                    rail_kept[name] = res
+                    continue
                 tol = max(0.03, 0.02 * (g_hi - g_lo))
                 frac_edge = float(np.mean((fe <= g_lo + tol) | (fe >= g_hi - tol)))
                 if frac_edge >= 0.5:
                     railed.append((name, frac_edge, g_lo, g_hi))
                 else:
                     rail_kept[name] = res
+            if railed and not rail_kept:
+                # Every grid railed. Dropping them all would leave nothing, so
+                # the guard below declines to act, but staying silent about it
+                # disarms the one diagnostic that catches a broken [Fe/H] prior
+                # precisely when it is broken everywhere.
+                warnings.warn(
+                    f"The [Fe/H] posterior railed against the axis edge on ALL "
+                    f"{len(railed)} grid(s) for {self._star.starname} "
+                    + ", ".join(f"{n} ({f:.0%})" for n, f, _lo, _hi in railed)
+                    + ". That points at the [Fe/H] prior rather than at the "
+                    "grids; no grid was dropped. Check the metallicity prior "
+                    "before using these results.",
+                    RuntimeWarning,
+                )
             if railed and rail_kept:
                 for name, frac, lo, hi in railed:
                     self.dropped_grids.append(
@@ -883,13 +1002,13 @@ class Fitter:
         # per-grid posteriors.
         for _name, _res in results.items():
             _p = self._fitters[_name].prior
-            _off = np.log(_p.eep_hi - _p.eep_lo)
+            _off = _log_box(_p.eep_lo, _p.eep_hi)
             if getattr(_p, "_age_type", "log_uniform") == "uniform":
-                _off += np.log(10.0 ** _p.age_hi - 10.0 ** _p.age_lo)
+                _off += _log_box(10.0 ** _p.age_lo, 10.0 ** _p.age_hi)
             else:
-                _off += np.log(_p.age_hi - _p.age_lo)
+                _off += _log_box(_p.age_lo, _p.age_hi)
             if getattr(_p, "_feh_type", "uniform") == "uniform":
-                _off += np.log(_p.feh_hi - _p.feh_lo)
+                _off += _log_box(_p.feh_lo, _p.feh_hi)
             _res["logz"] = float(_res["logz"] + _off)
 
         # BMA

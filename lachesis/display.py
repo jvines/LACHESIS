@@ -174,9 +174,14 @@ def display_summary(samples, derived, param_names):
         ), c))
 
     if "eep" in param_names:
-        med_eep = np.median(samples[:, param_names.index("eep")])
-        state = _eep_to_state(med_eep)
-        print(colored(f"{_T3}{'Evol. state':20s}  {state}", c))
+        eep_col = np.asarray(samples[:, param_names.index("eep")])
+        eep_col = eep_col[np.isfinite(eep_col)]
+        # Every other row of this table filters to the finite subset first.
+        # Without it an empty or all-NaN column reports a phase rather than
+        # admitting there is nothing to report.
+        if eep_col.size:
+            state = _eep_to_state(float(np.median(eep_col)))
+            print(colored(f"{_T3}{'Evol. state':20s}  {state}", c))
 
     print()
 
@@ -220,6 +225,11 @@ _EEP_PHASE_LABELS = {
 
 def _eep_to_state(eep: float) -> str:
     """Map an EEP value to its phase using config.EEP_PHASES boundaries."""
+    if not np.isfinite(eep):
+        # Every `eep < threshold` comparison is False for NaN, so the loop
+        # below would fall through and return the LAST label, reporting the
+        # most evolved phase there is for a fit that produced no posterior.
+        return "unknown"
     last = "Pre-Main Sequence"
     for phase, threshold in EEP_PHASES.items():
         if eep < threshold:

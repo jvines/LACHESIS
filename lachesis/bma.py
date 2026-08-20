@@ -61,6 +61,21 @@ def bayesian_model_average(
 
     # Evidence weights
     log_z = np.array([r["logz"] for r in results])
+    if not np.all(np.isfinite(log_z)):
+        # A single non-finite log-evidence poisons everything downstream and
+        # does it quietly: log_z.max() becomes NaN, every weight becomes NaN,
+        # np.round(NaN * N) is 0 and the (weights > 0) floor does not rescue it
+        # because NaN > 0 is False. Every model then draws zero samples, so
+        # this returns a (0, ndim) posterior with no exception and the run
+        # reports success with an empty result.
+        bad = [
+            f"{nm}={z!r}" for nm, z in zip(names, log_z) if not np.isfinite(z)
+        ]
+        raise ValueError(
+            "Cannot model-average on a non-finite log-evidence: "
+            + ", ".join(bad)
+            + ". Drop these grids, or check for a zero-width prior dimension."
+        )
     # Per-grid nested-sampling uncertainty on each log-evidence (persisted so the
     # weights carry their evidence error; NaN if a result predates it).
     log_z_err = np.array([r.get("logzerr", np.nan) for r in results])
@@ -88,6 +103,11 @@ def bayesian_model_average(
     n_per_model = np.round(weights * total_samples).astype(int)
     # Ensure at least 1 sample per model with nonzero weight
     n_per_model = np.maximum(n_per_model, (weights > 0).astype(int))
+    if n_per_model.sum() == 0:
+        raise ValueError(
+            "Model averaging drew zero samples from every model "
+            f"(weights={weights}). The combined posterior would be empty."
+        )
 
     all_samples = []
     all_derived = {}
