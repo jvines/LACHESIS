@@ -137,3 +137,35 @@ class TestFitterSaveBMAPassesParamNames:
             "Fitter._save_bma must explicitly pass param_names= to "
             "save_summary_dat or the .dat loses sampled-parameter rows"
         )
+
+
+class TestDegenerateColumns:
+    """After a fixed-[Fe/H] fit the posterior carries a constant column, which
+    is now routine rather than pathological."""
+
+    def test_eep_to_state_rejects_nan(self):
+        """Every `eep < threshold` comparison is False for NaN, so the loop
+        fell through and returned the LAST label: a fit with no posterior at
+        all reported the most evolved phase there is."""
+        import numpy as np
+
+        from lachesis.display import _eep_to_state
+
+        assert _eep_to_state(np.nan) == "unknown"
+        assert _eep_to_state(np.inf) == "unknown"
+        assert _eep_to_state(300.0) != "unknown"
+
+    def test_display_summary_survives_an_empty_posterior(self, capsys):
+        import numpy as np
+
+        from lachesis.display import display_summary
+
+        samples = np.full((0, 3), np.nan)
+        display_summary(samples, {}, ["eep", "log_age", "feh"])
+        out = capsys.readouterr().out
+        assert "TP-AGB" not in out
+
+        # And an all-NaN (rather than empty) EEP column.
+        display_summary(np.full((20, 3), np.nan), {},
+                        ["eep", "log_age", "feh"])
+        assert "TP-AGB" not in capsys.readouterr().out

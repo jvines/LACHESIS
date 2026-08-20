@@ -132,3 +132,62 @@ class TestLogLikelihood:
                 observed={"nonexistent_col": 1.0},
                 uncertainties={"nonexistent_col": 0.1},
             )
+
+
+class _StubInterp:
+    """Minimal stand-in: build_likelihood_plan only reads `_columns`."""
+
+    _columns = ["Teff", "log_Teff", "log_g", "log_L", "log_R", "Mbol",
+                "initial_mass"]
+
+
+class TestDegenerateUncertainties:
+    """A parameter fixed upstream is a prior, not a zero-uncertainty
+    measurement. Feeding it to the likelihood used to fail two different ways,
+    neither of which named the observable."""
+
+    OBS = {"feh": -0.5, "log_g": 4.42, "log_Teff": 3.76, "log_R": 0.01}
+
+    @pytest.mark.parametrize("key", ["feh", "log_g", "log_Teff", "log_R"])
+    @pytest.mark.parametrize("sigma", [0.0, -1.0, np.nan, np.inf])
+    def test_non_positive_sigma_is_rejected_by_name(self, key, sigma):
+        from lachesis.error import InputError
+        from lachesis.likelihood import build_likelihood_plan
+
+        unc = {k: 0.05 for k in self.OBS}
+        unc[key] = sigma
+        with pytest.raises(InputError, match=key):
+            build_likelihood_plan(_StubInterp(), self.OBS, unc)
+
+    def test_zero_sigma_used_to_raise_a_bare_math_domain_error(self):
+        """math.log(0.0) raised ValueError('math domain error'), which the
+        sampler re-raised as a FittingError against the grid."""
+        from lachesis.error import InputError
+        from lachesis.likelihood import build_likelihood_plan
+
+        with pytest.raises(InputError):
+            build_likelihood_plan(
+                _StubInterp(), {"feh": -0.5}, {"feh": 0.0})
+
+    def test_epsilon_sigma_is_rejected(self):
+        """np.std of a constant column is a ~5.6e-17 residue for some values.
+        It stays finite through (obs - pred) / sigma, so nothing caught it and
+        the log-evidence was displaced by ~1e32 per grid."""
+        from lachesis.likelihood import build_likelihood_plan
+
+        residue = 5.551115123125783e-17
+        # It is not rejected on width here (that is caught at the source, in
+        # Star.from_ariadne), but it must never reach the kernel as a
+        # meaningful constraint. Confirm the displacement it would cause.
+        plan, has_phot, const = build_likelihood_plan(
+            _StubInterp(), {"feh": -0.13}, {"feh": residue})
+        from lachesis.likelihood import eval_likelihood_plan
+        lnl = eval_likelihood_plan(plan, has_phot, const, {}, -2.0)
+        assert lnl < -1e30, "a residue sigma makes a delta-function chi2"
+
+    def test_valid_sigma_still_builds(self):
+        from lachesis.likelihood import build_likelihood_plan
+
+        plan, _has_phot, _const = build_likelihood_plan(
+            _StubInterp(), self.OBS, {k: 0.05 for k in self.OBS})
+        assert {k for k, *_ in plan} == set(self.OBS)

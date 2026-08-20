@@ -88,3 +88,43 @@ def _make_fake_result(logz, logzerr, n_samples, seed):
         "logzerr": logzerr,
         "derived": derived,
     }
+
+
+class TestNonFiniteEvidence:
+    """A single non-finite log-evidence used to poison everything quietly:
+    log_z.max() becomes NaN, every weight becomes NaN, np.round(NaN * N) is 0
+    and the (weights > 0) floor does not rescue it because NaN > 0 is False.
+    Every model drew zero samples and the run reported success on a (0, ndim)
+    posterior."""
+
+    @staticmethod
+    def _result(logz):
+        return {
+            "logz": logz,
+            "logzerr": 0.1,
+            "samples": np.zeros((10, 3)),
+            "derived": {"mass": np.ones(10)},
+        }
+
+    @pytest.mark.parametrize("bad", [np.nan, -np.inf, np.inf])
+    def test_non_finite_logz_raises(self, bad):
+        with pytest.raises(ValueError, match="non-finite log-evidence"):
+            bayesian_model_average(
+                [self._result(-120.0), self._result(bad)],
+                names=["good", "bad"],
+            )
+
+    def test_error_names_the_offending_grid(self):
+        with pytest.raises(ValueError, match="geneva"):
+            bayesian_model_average(
+                [self._result(-120.0), self._result(-np.inf)],
+                names=["mist", "geneva"],
+            )
+
+    def test_finite_evidence_still_works(self):
+        result = bayesian_model_average(
+            [self._result(-120.0), self._result(-121.0)],
+            names=["a", "b"],
+        )
+        assert len(result.samples) > 0
+        assert np.all(np.isfinite(result.weights))

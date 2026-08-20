@@ -1,5 +1,6 @@
 """Tests for nested sampling integration, TDD."""
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -160,3 +161,125 @@ class TestIsochroneFitter:
             f"crash; observed call sequence: {call_log}"
         )
         assert np.isfinite(result["logz"])
+
+
+class TestFixedFehEndToEnd:
+    """Fitter.initialize on a Star loaded from an upstream posterior with a
+    FIXED [Fe/H]. Every assertion here failed before: -0.5 raised LinAlgError
+    out of gaussian_kde, and -0.13 built a prior that returned feh_lo for
+    every draw.
+
+    Deliberately NOT wrapped in try/except -> pytest.skip: a regression here
+    must fail, not disappear.
+    """
+
+    @staticmethod
+    def _star(feh):
+        from lachesis.star import Star
+
+        star = Star("dummy", ra=0.0, dec=0.0,
+                    magnitudes={"Bessell_V": (10.0, 0.05)},
+                    plx=2.0, plx_e=0.02, Av=0.1, verbose=False, offline=True)
+        star.teff, star.teff_e = 5750.0, 40.0
+        star.logg, star.logg_e = 4.42, 0.03
+        star.feh, star.feh_e = feh, None
+        star.feh_posterior = np.full(2000, feh)
+        star.external_posteriors = {}
+        return star
+
+    @pytest.mark.parametrize("feh", [-0.5, -0.13])
+    def test_initialize_honours_a_fixed_feh(self, feh):
+        from lachesis.fitter import Fitter
+
+        if FULL_GRID_H5 is None:
+            pytest.skip("MIST grid not available")
+        f = Fitter()
+        f.star = self._star(feh)
+        f.grids = ["mist"]
+        f.bma = False
+        f.verbose = False
+        with pytest.warns(RuntimeWarning):
+            f.initialize()
+        prior = f._fitters["mist"].prior
+        assert prior._feh_type == "fixed"
+        for u in (0.0, 0.1, 0.5, 0.9, 1.0):
+            drawn = prior.prior_transform(np.full(prior.ndim, u))[2]
+            assert drawn == pytest.approx(feh)
+            assert drawn != pytest.approx(prior.feh_lo)
+        # The dimension stays in the vector; dropping it would desynchronise
+        # every positional theta index downstream.
+        assert "feh" in prior.param_names
+
+    def test_degenerate_external_prior_is_rejected_by_name(self):
+        from lachesis.error import InputError
+        from lachesis.fitter import Fitter
+
+        if FULL_GRID_H5 is None:
+            pytest.skip("MIST grid not available")
+        star = self._star(-0.13)
+        star.external_posteriors = {"Teff": np.full(2000, 5750.0)}
+        f = Fitter()
+        f.star = star
+        f.grids = ["mist"]
+        f.bma = False
+        f.verbose = False
+        with pytest.raises(InputError, match="Teff"):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                f.initialize()
+
+    def test_external_kde_tables_have_width(self):
+        """lo == hi made pad zero, the 2048-node table collapsed onto a point,
+        and the sampler's range check then rejected every proposal."""
+        from lachesis.fitter import Fitter
+
+        if FULL_GRID_H5 is None:
+            pytest.skip("MIST grid not available")
+        star = self._star(-0.13)
+        rng = np.random.default_rng(0)
+        star.external_posteriors = {"Teff": rng.normal(5750, 40, 2000)}
+        f = Fitter()
+        f.star = star
+        f.grids = ["mist"]
+        f.bma = False
+        f.verbose = False
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            f.initialize()
+        for _param, (grid_x, _log_pdf) in f._fitters["mist"]._external_kdes.items():
+            assert grid_x[-1] > grid_x[0]
+
+    def test_unrecognised_feh_prior_head_raises(self):
+        from lachesis.error import InputError
+        from lachesis.fitter import Fitter
+
+        if FULL_GRID_H5 is None:
+            pytest.skip("MIST grid not available")
+        f = Fitter()
+        f.star = self._star(-0.13)
+        f.grids = ["mist"]
+        f.bma = False
+        f.verbose = False
+        f.prior_setup = {"feh": ("fixd", -0.13)}
+        with pytest.raises(InputError, match="Unrecognised"):
+            f.initialize()
+
+    def test_explicit_fixed_prior_setup_is_honoured(self):
+        """('fixed', v) used to fall through every branch and land on the
+        upstream KDE, i.e. the instruction was accepted and ignored."""
+        from lachesis.fitter import Fitter
+
+        if FULL_GRID_H5 is None:
+            pytest.skip("MIST grid not available")
+        f = Fitter()
+        f.star = self._star(-0.13)
+        f.grids = ["mist"]
+        f.bma = False
+        f.verbose = False
+        f.prior_setup = {"feh": ("fixed", 0.21)}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            f.initialize()
+        prior = f._fitters["mist"].prior
+        assert prior._feh_type == "fixed"
+        assert prior.prior_transform(np.full(prior.ndim, 0.5))[2] == pytest.approx(0.21)
