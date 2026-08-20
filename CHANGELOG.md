@@ -1,5 +1,93 @@
 # Changelog
 
+## [1.0.6] - 2026-08-20
+
+### Changed
+- Default age prior upper bound lowered from log t = 10.3 (19.95 Gyr) to
+  10.1399 (13.8 Gyr, Planck 2018 age of the universe). Besides removing
+  unphysical super-Hubble ages, this equalizes the age support across grids
+  with different native ceilings (MIST 10.30, PARSEC 10.25,
+  DSEP/BaSTI/YaPSI 10.176), closing a BMA bias where the common-measure
+  evidence correction (`ln(age box)`) rewarded the widest-axis grid exactly
+  on stars whose likelihood rails old, e.g. HD 191939: MIST weight 0.88 ->
+  0.10 and BMA median 18.7 -> 12.1 Gyr after the change. Override via
+  `Fitter.age_range` for grid-systematics experiments.
+
+- Geneva is excluded from BMA, as the README has always documented but nothing
+  enforced, and is removed from the default grid list so `bma = True` on the
+  defaults does not trip the guard. Its coverage (0.5-3.5 Msun, log t 7.5-10.2)
+  is too narrow to put on a common evidence scale with the other grids. Until
+  now the a-posteriori [Fe/H] rail drop removed it by accident, and only while
+  lachesis-grids shipped a solar-only Geneva.
+
+### Fixed
+- The shipped Geneva grid was cited as Ekstroem+ 2012 (0.8-120 Msun, solar
+  metallicity, rotating). It is built by `scripts/build_geneva_mowlavi.py`
+  from the non-rotating Mowlavi+ 2012 grid (VizieR J/A+A/541/A41, Z = 0.006
+  to 0.040, M = 0.5-3.5 Msun), so anyone citing Geneva from a LACHESIS run was
+  citing the wrong paper. `citations.md`, the README grid table and the
+  `geneva.py` docstring are corrected.
+- A metallicity FIXED in the upstream ARIADNE fit arrives as a constant
+  posterior column, and every layer that consumed it failed differently.
+  `gaussian_kde` raised `LinAlgError` only when the covariance evaluated to
+  exactly zero, which depends on the bit pattern of the fixed value: a
+  constant -0.5 raised, a constant -0.13 built a KDE of bandwidth ~1e-18
+  whose mass fell between two nodes of the tabulated inverse CDF, so the
+  normalisation was 0/0 and every draw came back as `feh_lo`. That fit ran
+  to completion with [Fe/H] pinned at the grid's metallicity floor and a zero
+  error bar. [Fe/H] priors are now screened on `np.ptp` and a degenerate one
+  becomes an explicit fixed prior. `prior_setup={'feh': ('fixed', v)}` is
+  recognised (it was silently ignored, falling through to the ARIADNE KDE).
+- The inverse CDF for a KDE [Fe/H] prior is tabulated on the sample support
+  rather than the full prior range. A posterior narrower than one grid cell
+  (2.4e-3 dex on the default range) resolved to one or two nodes, which
+  `np.interp` turns into a pin or a uniform ramp: a posterior at -0.13 with
+  sigma 2e-4 drew a mean of -1.07 with a minimum of -2.0. Realistic
+  posteriors are unaffected (verified to sub-millidex against the old
+  tabulation).
+- Observable uncertainties are validated before use. `np.std` of a constant
+  column is 0 for some values and a ~5.6e-17 residue for others; the first
+  raised a bare `math domain error` out of `log(sigma)` well after
+  `initialize()` had succeeded, and the second displaced each grid's
+  log-evidence by ~1e32 with no error at all, collapsing the BMA onto one
+  grid. `Star.from_ariadne` now reports no uncertainty for a parameter that
+  was fixed upstream, and `Star.observed` / `Star.uncertainties` agree on
+  membership.
+- An upstream Av prior is no longer applied to a star inside the Local
+  Bubble, where `av_range` is None and Av is not sampled. The sampler read it
+  back as None and returned `-inf` for every proposal, so the fit died in
+  dynesty's live-point initialisation and was reported as the star lying
+  outside the coverage of every grid. This affected any ARIADNE-sourced star
+  within 70 pc, whether or not [Fe/H] was fixed.
+- External priors built from a degenerate posterior column are rejected by
+  name instead of skipped with a bare `except LinAlgError: continue`. The
+  silent skip deleted a whole constraint from the likelihood, and tabulating
+  it instead collapsed the 2048-node table onto a single point, after which
+  the sampler rejected every proposal.
+- The [Fe/H] grid-coverage drop was gated on a Gaussian prior, so it never
+  ran on the ARIADNE path, which produces a KDE prior. It now keys on the
+  prior's central value, warns unconditionally rather than only when verbose,
+  and records to `dropped_grids`.
+- Zero-width prior boxes no longer produce infinities. `-log(0)` made
+  `log_prior` `+inf` for a fixed Av, and `log(0)` made the BMA common-scale
+  correction `-inf` for a single-metallicity grid, which reaches
+  `bayesian_model_average` as NaN weights, zero samples drawn from every
+  model, and an empty combined posterior returned as a success.
+  `bayesian_model_average` now refuses a non-finite log-evidence.
+- `_eep_to_state` returned "TP-AGB / post-AGB" for a NaN EEP, because every
+  `eep < threshold` comparison is False for NaN and the loop fell through to
+  the last label. A fit with no posterior reported the most evolved phase
+  there is.
+- A distance prior with a non-positive sigma raises instead of dividing by
+  it, which gave `ZeroDivisionError` for a Python float and silent NaN
+  parameter vectors for a `np.float64`.
+- `show_priors` reported a fixed [Fe/H] as a wide uniform, and a
+  single-metallicity grid as `U(0.00, 0.00)`.
+- `librarian/_api.py`: the RUWE > 1.4 unresolved-binary warning crashed with
+  `NameError` (missing local `termcolor` import), the only unconditional
+  `colored()` call site without one. Any target with RUWE > 1.4 failed to
+  build a `Star` at all.
+
 ## [1.0.5] - 2026-07-11
 
 ### Changed
