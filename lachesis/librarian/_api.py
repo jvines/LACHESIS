@@ -398,6 +398,7 @@ class Librarian:
         if ruwe is not None:
             self._ruwe = float(ruwe)
             if self._ruwe > 1.4:
+                from termcolor import colored
                 print(colored(
                     f"\t\t\tWARNING: Gaia RUWE = {self._ruwe:.2f} > 1.4 -- likely an "
                     f"unresolved binary; the photometric luminosity (and the radius/"
