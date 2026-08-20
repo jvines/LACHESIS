@@ -6,8 +6,35 @@ Without this, the prior is flat in EEP which over-weights high-mass
 evolutionary states.
 """
 
+import math
+import warnings
+
 import numpy as np
 from scipy.special import ndtr, ndtri
+
+from lachesis.error import PriorError
+
+# Nodes in the tabulated inverse CDF used to sample a KDE-based [Fe/H] prior.
+_FEH_CDF_NODES = 1024
+# Below this many surviving nodes the tabulation cannot represent the
+# distribution at all: 1 node pins every draw at a single value and 2 nodes
+# degrade to a uniform ramp across the whole prior range. Both used to happen
+# silently, so treat anything this coarse as a fixed [Fe/H] instead.
+_FEH_CDF_MIN_NODES = 32
+
+
+def _log_width(hi, lo):
+    """-log of a uniform prior's width, treating a zero width as a delta.
+
+    A fixed parameter is expressed as a zero-width range (Fitter does this for
+    prior_setup {'Av': ('fixed', v)}, and single-metallicity grids clamp to it),
+    for which -log(0) is +inf. A delta carries no prior volume, so it
+    contributes 0 and stays comparable across grids.
+    """
+    w = hi - lo
+    if not (w > 0):
+        return 0.0
+    return -float(np.log(w))
 
 
 def _truncated_normal_ppf(u, mean, sigma, lo, hi):
@@ -15,12 +42,27 @@ def _truncated_normal_ppf(u, mean, sigma, lo, hi):
 
     Maps u in [0, 1] to a sample of N(mean, sigma) restricted to [lo, hi].
     Avoids the np.clip-on-Gaussian artefact (delta spikes at boundaries).
+
+    A non-positive sigma collapses the normal to a delta at `mean`. That is
+    reachable from an upstream-fixed parameter, whose posterior standard
+    deviation is 0 (or a ~1e-17 rounding residue), and the unguarded division
+    below raises ZeroDivisionError for a Python float and silently returns NaN
+    for a np.float64. Return the delta instead.
     """
+    if not (sigma > 0) or not np.isfinite(sigma):
+        return float(np.clip(mean, lo, hi))
     a = (lo - mean) / sigma
     b = (hi - mean) / sigma
     Fa = ndtr(a)
     Fb = ndtr(b)
-    return mean + sigma * ndtri(Fa + u * (Fb - Fa))
+    val = mean + sigma * ndtri(Fa + u * (Fb - Fa))
+    if not math.isfinite(val):
+        # For a prior narrow enough that Fa underflows to 0 (or Fb to 1),
+        # ndtri saturates at -inf/+inf at the ends of the unit cube. dynesty
+        # does propose u == 0.0. Return the truncated mean rather than an
+        # infinite parameter value.
+        return float(np.clip(mean, lo, hi))
+    return val
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +194,16 @@ class IsochronePrior:
             self._feh_type = "uniform"
         else:
             self._feh_type = feh_prior[0]
-            if self._feh_type == "gaussian":
-                self._feh_mean = feh_prior[1]
-                self._feh_sigma = feh_prior[2]
+            if self._feh_type == "fixed":
+                # feh_prior = ("fixed", value)
+                self._feh_value = float(feh_prior[1])
+            elif self._feh_type == "gaussian":
+                self._feh_mean = float(feh_prior[1])
+                self._feh_sigma = float(feh_prior[2])
+                if not (self._feh_sigma > 0) or not np.isfinite(self._feh_sigma):
+                    # N(mu, 0) is a delta, not a normal. Reachable from a
+                    # parameter fixed upstream, whose posterior sigma is 0.
+                    self._set_fixed_feh(self._feh_mean, reason="degenerate")
             elif self._feh_type == "kde":
                 # feh_prior = ("kde", samples_array)
                 samples = np.asarray(feh_prior[1])
@@ -169,8 +218,25 @@ class IsochronePrior:
         if self._has_distance:
             # ("normal", mean, sigma), truncated normal at 0, like ARIADNE
             self._dist_type = distance_prior[0]
-            self._dist_mean = distance_prior[1]
-            self._dist_sigma = distance_prior[2]
+            self._dist_mean = float(distance_prior[1])
+            self._dist_sigma = float(distance_prior[2])
+            # A zero or non-finite sigma collapses dist_lo onto dist_hi and the
+            # ndtr calls below divide by it: ZeroDivisionError for a Python
+            # float, a silent NaN in every parameter vector for a np.float64.
+            # It reaches here from a parallax or distance fixed upstream.
+            if not (self._dist_sigma > 0) or not np.isfinite(self._dist_sigma):
+                raise PriorError(
+                    f"The distance prior has sigma={distance_prior[2]!r}, which "
+                    f"is not a positive width. A distance that was fixed in the "
+                    f"upstream fit cannot be used as a distance PRIOR; pass it "
+                    f"explicitly, e.g. prior_setup={{'dist': ('normal', "
+                    f"{self._dist_mean:.4g}, <uncertainty>)}}."
+                )
+            if not np.isfinite(self._dist_mean):
+                raise PriorError(
+                    f"The distance prior has a non-finite mean "
+                    f"({distance_prior[1]!r})."
+                )
             # Sampling range: mean ± 10σ, truncated at 0
             self.dist_lo = max(0.1, self._dist_mean - 10 * self._dist_sigma)
             self.dist_hi = self._dist_mean + 10 * self._dist_sigma
@@ -210,24 +276,115 @@ class IsochronePrior:
         self._has_jitter = len(self._jitter_bands) > 0
 
     def _build_feh_kde(self, samples):
-        """Build KDE + inverse CDF for sampling from an arbitrary distribution."""
+        """Build KDE + inverse CDF for sampling from an arbitrary distribution.
+
+        The samples are normally an ARIADNE [Fe/H] posterior. When [Fe/H] was
+        FIXED in the ARIADNE run the column is constant, and handing that to
+        scipy is a coin flip rather than a clean failure: the singular-covariance
+        guard fires only when the covariance evaluates to exactly zero, which
+        depends on the bit pattern of the fixed value and on the sample count.
+        A constant -0.5 raises LinAlgError; a constant -0.13 builds a KDE of
+        bandwidth ~1e-18 whose entire mass falls between two nodes of the
+        tabulated CDF, so every node underflows to zero, the normalisation is
+        0/0, the monotonicity mask keeps a single node and every draw comes back
+        as feh_lo. That silently pins the fit at the grid's metallicity floor.
+
+        So measure the spread first and treat anything the tabulation cannot
+        resolve as a fixed [Fe/H]. np.ptp is the right test: it is exactly zero
+        for a constant array whatever the value, whereas np.std both misses
+        (2e-16 for a constant -1.47) and over-reports (exactly 0.0 for a
+        constant 3.0, which scipy nonetheless accepts).
+        """
         from scipy.stats import gaussian_kde
+
+        samples = np.asarray(samples, dtype=float).ravel()
+        finite = samples[np.isfinite(samples)]
+        if finite.size == 0:
+            raise PriorError(
+                "The [Fe/H] prior samples are all non-finite. Check the "
+                "metallicity column of the source posterior."
+            )
+        if finite.size < samples.size:
+            warnings.warn(
+                f"Dropped {samples.size - finite.size} non-finite sample(s) "
+                f"from the [Fe/H] prior.",
+                RuntimeWarning, stacklevel=2,
+            )
+        samples = finite
+
+        # A posterior narrower than one cell of the inverse-CDF grid cannot be
+        # tabulated, and that includes the degenerate (upstream-fixed) case.
+        cell = (self.feh_hi - self.feh_lo) / (_FEH_CDF_NODES - 1)
+        if float(np.ptp(samples)) <= cell:
+            self._set_fixed_feh(float(np.median(samples)), reason="degenerate")
+            return
+
         # Clip samples to the feh prior range so the inverse CDF is bounded
-        samples = samples[(samples >= self.feh_lo) & (samples <= self.feh_hi)]
-        if len(samples) < 10:
-            # Too few samples, fall back to uniform
+        in_range = samples[(samples >= self.feh_lo) & (samples <= self.feh_hi)]
+        if len(in_range) < 10:
+            # Outside this grid's metallicity coverage. Falling back to uniform
+            # silently replaces a measured [Fe/H] with an uninformative one AND
+            # changes the evidence normalisation (Fitter._bma_offset adds the
+            # prior box only for uniform [Fe/H]), so say so out loud. The
+            # coverage drop in Fitter.initialize is what should catch this
+            # first; this is the backstop.
+            warnings.warn(
+                f"Only {len(in_range)} of {len(samples)} [Fe/H] prior samples "
+                f"fall inside this grid's coverage "
+                f"[{self.feh_lo:.2f}, {self.feh_hi:.2f}]; falling back to a "
+                f"UNIFORM [Fe/H] prior for this grid. The measured metallicity "
+                f"is not being used here, and this grid's evidence is not "
+                f"comparable with grids that did use it.",
+                RuntimeWarning, stacklevel=2,
+            )
             self._feh_type = "uniform"
             return
+        samples = in_range
+
         self._feh_kde = gaussian_kde(samples)
-        # Build inverse CDF on a fine grid for prior_transform
-        grid = np.linspace(self.feh_lo, self.feh_hi, 1024)
+        # Build the inverse CDF on the sample support rather than the full prior
+        # range. Spanning the whole range wastes the tabulation on a posterior
+        # much narrower than it: a sigma of 2e-4 dex over [-2.0, 0.5] resolves
+        # to two nodes, which np.interp turns into a uniform ramp across the
+        # lower half of the axis.
+        lo, hi = float(samples.min()), float(samples.max())
+        pad = max(0.1 * (hi - lo), 5.0 * float(np.std(samples)))
+        grid = np.linspace(
+            max(self.feh_lo, lo - pad), min(self.feh_hi, hi + pad),
+            _FEH_CDF_NODES,
+        )
         pdf = self._feh_kde(grid)
         cdf = np.cumsum(pdf)
-        cdf = cdf / cdf[-1]
+        total = float(cdf[-1])
+        if not np.isfinite(total) or total <= 0:
+            raise PriorError(
+                "The [Fe/H] KDE integrates to zero over "
+                f"[{grid[0]:.3f}, {grid[-1]:.3f}]. The posterior is too narrow "
+                "to tabulate; supply it as a Gaussian prior instead."
+            )
+        cdf = cdf / total
         # Remove duplicates for strict monotonicity
         mask = np.concatenate([[True], np.diff(cdf) > 0])
         self._feh_cdf_x = grid[mask]
         self._feh_cdf_y = cdf[mask]
+        if self._feh_cdf_x.size < _FEH_CDF_MIN_NODES:
+            self._set_fixed_feh(float(np.median(samples)), reason="unresolved")
+
+    def _set_fixed_feh(self, value: float, reason: str = "degenerate") -> None:
+        """Switch the [Fe/H] prior to a delta at `value`."""
+        self._feh_type = "fixed"
+        self._feh_value = float(value)
+        detail = {
+            "degenerate": "has zero spread",
+            "unresolved": "is too narrow to tabulate",
+        }.get(reason, reason)
+        warnings.warn(
+            f"The [Fe/H] prior sample {detail}; treating [Fe/H] as FIXED at "
+            f"{self._feh_value:+.4f}. This is what an upstream fit with a fixed "
+            f"metallicity looks like. Stellar age and mass uncertainties from "
+            f"this fit will NOT include any metallicity uncertainty.",
+            RuntimeWarning, stacklevel=3,
+        )
 
     def _build_named_feh_prior(self, name: str):
         """Build inverse CDF for a named [Fe/H] population prior."""
@@ -290,6 +447,12 @@ class IsochronePrior:
                 u[2], self._feh_mean, self._feh_sigma,
                 self.feh_lo, self.feh_hi,
             )
+        elif self._feh_type == "fixed":
+            # Delta prior: the dimension stays in the vector (dropping it would
+            # desynchronise every positional theta index downstream) but every
+            # draw returns the same value, so it integrates to exactly 1 and
+            # leaves the evidence comparable across grids.
+            theta[2] = self._feh_value
         elif self._feh_type in ("kde", "morton", "rave"):
             # Inverse CDF sampling (KDE, Morton, or RAVE)
             theta[2] = np.interp(u[2], self._feh_cdf_y, self._feh_cdf_x)
@@ -386,7 +549,7 @@ class IsochronePrior:
             lnp += np.log(imf_val) + np.log(dm_deep)
         else:
             # Fallback: flat in EEP (wrong but won't crash)
-            lnp += -np.log(self.eep_hi - self.eep_lo)
+            lnp += _log_width(self.eep_hi, self.eep_lo)
 
         # Age prior
         if self._age_type == "uniform":
@@ -399,7 +562,7 @@ class IsochronePrior:
             )
         else:
             # Flat in log_age
-            lnp += -np.log(self.age_hi - self.age_lo)
+            lnp += _log_width(self.age_hi, self.age_lo)
 
         # [Fe/H] prior
         if self._feh_type == "gaussian":
@@ -422,8 +585,11 @@ class IsochronePrior:
             if pdf <= 0:
                 return -np.inf
             lnp += np.log(pdf)
+        elif self._feh_type == "fixed":
+            # A delta carries no prior volume and is identical across grids.
+            lnp += 0.0
         else:
-            lnp += -np.log(self.feh_hi - self.feh_lo)
+            lnp += _log_width(self.feh_hi, self.feh_lo)
 
         # Distance prior (truncated normal, like ARIADNE)
         if self._has_distance:
@@ -436,9 +602,9 @@ class IsochronePrior:
                 - 0.5 * np.log(2 * np.pi)
                 - log_norm
             )
-        # Av prior (uniform)
+        # Av prior (uniform, or a delta when Av was fixed)
         if self._has_av:
-            lnp += -np.log(self.av_hi - self.av_lo)
+            lnp += _log_width(self.av_hi, self.av_lo)
 
         return lnp
 
