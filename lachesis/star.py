@@ -1,6 +1,7 @@
 """Star class, holds observed stellar properties for isochrone fitting."""
 
 import logging
+import warnings
 
 import numpy as np
 
@@ -357,10 +358,31 @@ class Star:
                     return post[n].values.flatten()
             return None
 
-        def _summary(arr):
-            if arr is not None:
-                return float(np.median(arr)), float(np.std(arr))
-            return None, None
+        def _summary(arr, label):
+            """Median and standard deviation, or (median, None) if fixed.
+
+            A parameter that was FIXED in the upstream fit comes back as a
+            constant column, whose standard deviation is 0 or a ~1e-17
+            rounding residue. Neither is a measurement uncertainty. Reporting
+            one as such turns the quantity into a delta-function chi2 term:
+            an exact 0 raises "math domain error" out of log(sigma), and the
+            residue silently displaces the log-evidence by ~1e32 per grid,
+            which collapses the BMA onto a single grid. np.ptp identifies a
+            constant column exactly, with no threshold to justify.
+            """
+            if arr is None:
+                return None, None
+            med = float(np.median(arr))
+            if float(np.ptp(arr)) == 0.0:
+                warnings.warn(
+                    f"The upstream posterior for '{label}' is constant "
+                    f"({med:+.6g}), i.e. it was FIXED in that fit. It carries "
+                    f"no uncertainty, so it will not be used as a likelihood "
+                    f"constraint here.",
+                    RuntimeWarning, stacklevel=3,
+                )
+                return med, None
+            return med, float(np.std(arr))
 
         # Extract full posterior arrays (ARIADNE name mapping)
         teff_arr = _samples("Teff", "teff")
@@ -371,11 +393,11 @@ class Star:
         av_arr = _samples("Av", "av")
         lum_arr = _samples("luminosity", "lum", "L")
 
-        teff, teff_e = _summary(teff_arr)
-        logg, logg_e = _summary(logg_arr)
-        feh, feh_e = _summary(feh_arr)
-        rad, rad_e = _summary(rad_arr)
-        dist, dist_e = _summary(dist_arr)
+        teff, teff_e = _summary(teff_arr, "Teff")
+        logg, logg_e = _summary(logg_arr, "logg")
+        feh, feh_e = _summary(feh_arr, "[Fe/H]")
+        rad, rad_e = _summary(rad_arr, "radius")
+        dist, dist_e = _summary(dist_arr, "distance")
 
         if ra is not None and dec is not None:
             # Use provided magnitudes or retrieve via Librarian
@@ -1113,19 +1135,34 @@ class Star:
                 return "giant"
         return "unknown"
 
+    @staticmethod
+    def _usable(value, err) -> bool:
+        """True when a quantity can enter a Gaussian likelihood.
+
+        `observed` and `uncertainties` are two halves of one thing, so they
+        have to agree on membership: build_likelihood_plan rejects an observed
+        key with no matching uncertainty. A quantity fixed upstream arrives
+        with err None (see from_ariadne) and is constrained through its prior
+        instead.
+        """
+        return (
+            value is not None and err is not None
+            and np.isfinite(err) and err > 0
+        )
+
     @property
     def observed(self) -> dict[str, float]:
         """Observable dict for the likelihood, translated to grid column names."""
         obs = {}
-        if self.teff is not None:
+        if self._usable(self.teff, self.teff_e):
             obs["log_Teff"] = np.log10(self.teff)
-        if self.logg is not None:
+        if self._usable(self.logg, self.logg_e):
             obs["log_g"] = self.logg
-        if self.feh is not None:
+        if self._usable(self.feh, self.feh_e):
             obs["feh"] = self.feh
-        if self.luminosity is not None:
+        if self._usable(self.luminosity, self.luminosity_e):
             obs["log_L"] = np.log10(self.luminosity)
-        if self.radius is not None:
+        if self._usable(self.radius, self.radius_e):
             obs["log_R"] = np.log10(self.radius)
         # Photometric bands, translate pyphot names to BC table names
         from lachesis.filters import PYPHOT_TO_BC
@@ -1139,15 +1176,15 @@ class Star:
     def uncertainties(self) -> dict[str, float]:
         """Uncertainty dict matching observed keys."""
         unc = {}
-        if self.teff is not None and self.teff_e is not None:
+        if self._usable(self.teff, self.teff_e):
             unc["log_Teff"] = self.teff_e / (self.teff * np.log(10))
-        if self.logg is not None and self.logg_e is not None:
+        if self._usable(self.logg, self.logg_e):
             unc["log_g"] = self.logg_e
-        if self.feh is not None and self.feh_e is not None:
+        if self._usable(self.feh, self.feh_e):
             unc["feh"] = self.feh_e
-        if self.luminosity is not None and self.luminosity_e is not None:
+        if self._usable(self.luminosity, self.luminosity_e):
             unc["log_L"] = self.luminosity_e / (self.luminosity * np.log(10))
-        if self.radius is not None and self.radius_e is not None:
+        if self._usable(self.radius, self.radius_e):
             unc["log_R"] = self.radius_e / (self.radius * np.log(10))
         from lachesis.filters import PYPHOT_TO_BC
         for band, (_mag, err) in self.magnitudes.items():

@@ -17,6 +17,7 @@ import math
 
 import numpy as np
 
+from lachesis.error import InputError
 from lachesis.interp import GridInterpolator
 
 # Observables that come from free parameters, not the grid
@@ -28,6 +29,32 @@ _LOG_2PI = math.log(2.0 * math.pi)
 _KIND_GRID = 0
 _KIND_FEH = 1
 _KIND_PHOT = 2
+
+
+def validate_sigma(key, sigma):
+    """Reject an uncertainty that is not a positive, finite width.
+
+    math.log(sigma) raises a bare "math domain error" naming neither the
+    observable nor the cause, and the sampler re-raises that as a FittingError
+    against the grid. The binary kernel does not even fail: it evaluates
+    -inf + inf and returns NaN. A non-positive sigma means the quantity was
+    fixed in the upstream fit, so it is a prior, not a measurement of zero
+    uncertainty.
+    """
+    if not (sigma > 0) or not math.isfinite(sigma):
+        raise InputError(
+            f"Observable '{key}' has a non-positive uncertainty ({sigma!r}). "
+            f"A quantity that was FIXED in the upstream fit cannot be used as "
+            f"a likelihood constraint here; drop it from the star's "
+            f"observables, or supply a real uncertainty."
+        )
+
+
+def validate_uncertainties(observed, uncertainties):
+    """Run `validate_sigma` over every observable, once, before a fit."""
+    for key in observed:
+        if key in uncertainties:
+            validate_sigma(key, uncertainties[key])
 
 
 def build_likelihood_plan(interp, observed, uncertainties, bc_table=None):
@@ -54,6 +81,7 @@ def build_likelihood_plan(interp, observed, uncertainties, bc_table=None):
         if key not in available:
             continue
         sigma = uncertainties[key]
+        validate_sigma(key, sigma)
         if key == "feh":
             kind = _KIND_FEH
         elif key in phot_bands:

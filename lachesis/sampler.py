@@ -12,6 +12,7 @@ from lachesis.interp import GridInterpolator
 from lachesis.likelihood import (
     log_likelihood,
     build_likelihood_plan,
+    validate_uncertainties,
     eval_likelihood_plan,
 )
 from lachesis.loglike_njit import loglike_kernel, build_njit_args
@@ -97,7 +98,11 @@ class IsochroneFitter:
         # re-filtering the observable dicts on every one of O(10^5) calls.
         like_plan = None
         njit_args = None
-        if not is_binary:
+        if is_binary:
+            # The binary kernel takes the raw dicts rather than a plan, so it
+            # misses the plan's uncertainty validation. Run it once here.
+            validate_uncertainties(obs, unc)
+        else:
             like_plan = build_likelihood_plan(interp, obs, unc, bc)
             # Fully-JIT'd kernel: eligible only without external-KDE priors
             # (the ext_kde loop stays in Python). Fuses interp + EEP prior +
