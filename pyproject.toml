@@ -32,7 +32,9 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "lachesis-grids>=0.0.3",
+    # >=0.0.7 stores the parsec_v1.2S_eeprebuild.h5 [Fe/H] axis ascending; older
+    # releases shipped it unsorted, so load_grid_hdf5 permuted the cube at load.
+    "lachesis-grids>=0.0.7",
     "numpy",
     "scipy",
     "h5py",
