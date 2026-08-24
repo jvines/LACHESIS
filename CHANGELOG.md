@@ -1,5 +1,49 @@
 # Changelog
 
+## [1.0.8] - 2026-08-24
+
+### Changed
+- PARSEC is rebuilt with EEPs anchored on the evolutionary tracks and ships as
+  `parsec_v1.25.h5` (lachesis-grids >= 0.0.8), replacing
+  `parsec_v1.2S_eeprebuild.h5`. The previous cube anchored the ZAMS on PARSEC's
+  own phase label, which is non-monotonic in mass -- at log t = 9 the runs are
+  `0: 0.090-0.170`, `1: 0.200` (a single point), `0: 0.239-0.600`,
+  `1: 0.650-2.009`, and at log t = 6.7 there are four separate label-0 runs, the
+  last reaching 38.7 Msun. It also marks stars pre-main-sequence long past the
+  ZAMS: against MIST's PMS mass ceiling the boundary ran 1.3x too massive at
+  log t = 7, 2.0x at log t = 8 and 4.8x at log t = 9, where a 0.65 Msun star has
+  been on the main sequence for ~800 Myr.
+
+  The isochrones cannot fix this themselves -- they carry no central hydrogen
+  (`X` is surface, `Xc` is carbon) -- so the anchors now come from the PARSEC
+  v1.2S tracks, taking the ZAMS where gravitational contraction ceases
+  (`|L_GRAV| < 0.01`, equivalently `LX > 0.99`). A fixed central-hydrogen
+  threshold is not used: it jumps 0.8 dex across the fully convective boundary.
+  The rebuilt boundary lands within ~10% of MIST at every age, the grid's own
+  fabrication metric improves from 10.2% to 9.5%, homology stays at Spearman
+  +1.000, and post-MS values are bit-identical since that path is untouched.
+
+- PARSEC therefore opts back into `Fitter.include_pms`, reversing the 1.0.7
+  exclusion, and pre-main-sequence fits are a real two-grid BMA again. On a
+  7-10 Myr target PARSEC's log-evidence goes from 7.79 (weight 0.000) to 25.02
+  (weight 0.890), above MIST's 22.93. The 1.0.7 failure mode is gone: a 3.06
+  Msun B9V main-sequence star that the old cube dragged to 2 Myr at EEP 151 now
+  returns 298 Myr at EEP 395 with `include_pms` on, against 280 Myr on defaults.
+
+  Note this moves PMS results relative to 1.0.7, which was MIST-only: the same
+  target shifts from 7.1 to 9.9 Myr and 0.560 to 0.699 Msun, now that a second
+  grid carries most of the weight.
+
+### Added
+- `scripts/rebuild_parsec_eep_tracks.py`, which builds the cube above from the
+  raw tracks. Track metallicities do not line up with the isochrone [M/H] axis
+  (four nodes sit more than 0.11 dex from the nearest track set), so the
+  EEP-vs-mass curve is interpolated in [M/H] between bracketing track sets.
+
+### Fixed
+- `lachesis-grids` sdist excluded `_backup/` and nested `dist*/`, which had put
+  it at 147 MB, over PyPI's 100 MiB file cap, while the wheel was fine at 91 MB.
+
 ## [1.0.7] - 2026-08-24
 
 ### Added

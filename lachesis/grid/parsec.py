@@ -12,13 +12,31 @@ PARSEC label -> EEP mapping:
   5 (E-AGB) -> EEP 707-808
   6 (TP-AGB) -> EEP 808-1200
 
-PRODUCTION CUBE. The shipped cube (parsec_v1.2S_eeprebuild.h5, loaded via
-``from_hdf5``) is built by ``scripts/rebuild_parsec_eep.py`` with a HOMOLOGOUS
-track-anchored EEP axis: PMS/MS EEPs come from reconstructed fixed-mass tracks
-(Dotter metric distance), post-MS EEPs from per-isochrone metric distance along
-the near-vertical giant branch. That removes the non-homologous mass-rank EEP
-that fabricated young-massive solutions (DEBcat spec-only bias), so no PMS mask
-is needed on load.
+PRODUCTION CUBE. The shipped cube (parsec_v1.25.h5, loaded via ``from_hdf5``)
+is built by ``scripts/rebuild_parsec_eep_tracks.py``. PMS/MS EEPs are anchored
+on the PARSEC v1.2S evolutionary tracks (CAF09_V1.2S_M36_LT): the ZAMS is taken
+where gravitational contraction ceases, |L_GRAV| < 0.01, equivalently LX > 0.99
+since the luminosity fractions sum to one. A fixed central-hydrogen depletion
+threshold is deliberately NOT used -- it jumps 0.8 dex across the fully
+convective boundary (0.30 -> 0.35 Msun), where those stars burn hydrogen
+globally and deplete the centre slowly. Post-MS EEPs still come from
+per-isochrone metric distance along the near-vertical giant branch.
+
+The tracks are needed because the isochrones cannot anchor the ZAMS themselves:
+they carry no central hydrogen (`X` is surface, `Xc` is carbon), so the earlier
+cube used PARSEC's phase label instead. That label is non-monotonic in mass --
+at log t = 9 the runs are 0: 0.090-0.170, 1: 0.200 (a single point),
+0: 0.239-0.600, 1: 0.650-2.009, and at log t = 6.7 there are four separate
+label-0 runs, the last reaching 38.7 Msun -- and it marks stars pre-main-sequence
+long past the ZAMS. Measured against MIST's PMS mass ceiling the label boundary
+ran 1.3x too massive at log t = 7, 2.0x at log t = 8 and 4.8x at log t = 9. The
+track anchors land within ~10% of MIST at every age, and the grid's own
+fabrication metric improves from 10.2% to 9.5%.
+
+Track metallicities do not line up with the isochrone [M/H] axis (four nodes sit
+more than 0.11 dex from the nearest track set), so the EEP-vs-mass curve is
+interpolated in [M/H] between bracketing track sets rather than snapped to the
+nearest, consistent with PARSEC's own isochrone generator interpolating in Z.
 
 LEGACY BUILDER. ``__init__`` + ``_assign_eep`` below build a cube from a
 directory of per-isochrone CSVs using per-phase linspace over mass-rank. That
@@ -249,20 +267,15 @@ class PARSECModelGrid:
     def eep_range(self) -> tuple[int, int]:
         return int(self._eep_values[0]), int(self._eep_values[-1])
 
-    # NO pms_eep_max: PARSEC deliberately does not opt into Fitter.include_pms.
-    # Its EEP<202 band is anchored on PARSEC's own phase label 0->1 transition
-    # (see rebuild_parsec_eep.py), and that label stays 0 well past the ZAMS, so
-    # the band is contaminated with main-sequence models. Measured against
-    # MIST's PMS mass ceiling at the same age and [Fe/H]=0: 1.3x too massive at
-    # log_age 7 (2.476 vs 1.877 Msun), 2.0x at log_age 8 (1.286 vs 0.656), and
-    # 4.7x at log_age 9 (0.650 vs 0.137) -- a 0.65 Msun star has been on the MS
-    # for ~800 Myr by then. Opening it drove a B9V main-sequence star (ASASSN-21js,
-    # 3.05 Msun, 285 Myr) to a 2 Myr "PMS" solution with PARSEC taking 0.66 of
-    # the BMA weight, and PARSEC scored 14 log-units below MIST on a genuinely
-    # pre-main-sequence target. A radius-inflation test against each mass's own
-    # minimum radius in this cube reproduces MIST's ceiling to 1% at log_age 7
-    # (1.899 Msun) and is the route to re-enabling this, once the threshold is
-    # calibrated across the age axis.
+    # See MISTGrid.pms_eep_max. PARSEC uses MIST's EEP scheme, so the same
+    # PMS/ZAMS boundary applies. Valid from parsec_v1.25.h5 onward, whose EEPs
+    # are anchored on the evolutionary tracks (|L_GRAV| < 0.01, i.e. contraction
+    # has ceased). The previous cube anchored on PARSEC's phase label, which is
+    # non-monotonic in mass and marks stars as pre-main-sequence long past the
+    # ZAMS -- its EEP<202 band ran 1.3x MIST's PMS mass ceiling at log t = 7 and
+    # 4.8x at log t = 9, and opening it drove a 3.06 Msun B9V main-sequence star
+    # to a 2 Myr solution. v1.25 sits within ~10% of MIST at every age.
+    pms_eep_max = 201
 
     @property
     def fitting_eep_range(self) -> tuple[int, int]:
