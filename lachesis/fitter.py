@@ -157,7 +157,13 @@ class Fitter:
         self._prior_setup = None
         self._av_law = "fitzpatrick"
         self._imf = "chabrier"
-        self._eep_range = (200, 808)
+        # Sample the pre-main-sequence on grids that carry it (mist,
+        # parsec). Off by default: LACHESIS targets field stars, and the
+        # PMS branch is degenerate with the giant branch in Teff/log g,
+        # so opening it without a youth indicator invites spurious young
+        # solutions. Turn on for genuinely young targets, together with
+        # an age_range whose floor reaches the relevant ages.
+        self._include_pms = False
         # Upper bound: age of the universe (13.8 Gyr, Planck 2018). Also
         # equalizes the age support across grids with different native
         # ceilings (MIST 10.30, PARSEC 10.25, DSEP/BaSTI/YaPSI 10.176), so
@@ -292,12 +298,12 @@ class Fitter:
         self._fit_jitter = bool(value)
 
     @property
-    def eep_range(self) -> tuple[float, float]:
-        return self._eep_range
+    def include_pms(self) -> bool:
+        return self._include_pms
 
-    @eep_range.setter
-    def eep_range(self, r):
-        self._eep_range = tuple(r)
+    @include_pms.setter
+    def include_pms(self, val: bool):
+        self._include_pms = bool(val)
 
     @property
     def age_range(self) -> tuple[float, float]:
@@ -704,19 +710,46 @@ class Fitter:
             self._grid_objects = {k: v for k, v in self._grid_objects.items() if k in kept_g}
             self._interpolators = {k: v for k, v in self._interpolators.items() if k in kept_g}
 
+        # Common-measure age support. BMA compares evidences, so every grid
+        # must integrate over the SAME age interval or a grid is rewarded
+        # purely for the extent of its axis. The ceiling was already equalised
+        # by the _age_range default sitting below every grid's maximum; the
+        # floor was not -- each grid fell back to its own native minimum, so
+        # mist/parsec sampled from 8.0 while dartmouth/basti started at 9.0.
+        # Intersect across the SELECTED grids: the default five-grid set is
+        # pinned to 9.0 by dartmouth/basti, while a deliberate mist+parsec
+        # selection keeps the full young range.
+        common_age_lo = max(
+            [self._age_range[0]]
+            + [float(self._grid_objects[n].age_values[0]) for n in self._grids]
+        )
+        common_age_hi = min(
+            [self._age_range[1]]
+            + [float(self._grid_objects[n].age_values[-1]) for n in self._grids]
+        )
+
         # Build IsochroneFitter per grid
         for name in self._grids:
             grid = self._grid_objects[name]
             if hasattr(grid, "fitting_eep_range"):
                 eep_lo, eep_hi = grid.fitting_eep_range
             else:
-                eep_lo = max(self._eep_range[0], grid.eep_range[0])
-                eep_hi = min(self._eep_range[1], grid.eep_range[1])
-            # Clamp age and [Fe/H] to each grid's actual coverage
+                eep_lo, eep_hi = grid.eep_range
+            # Unblock the PMS only on grids that declare where it ends. EEP is
+            # not a common coordinate -- mist/parsec use the MIST scheme, while
+            # basti/bhac15/geneva/yapsi/dartmouth/starevol index by mass or row
+            # (bhac15's axis is 0-29), so a global EEP floor is meaningless for
+            # them. Grids without pms_eep_max are left exactly as they were.
+            if self._include_pms:
+                pms_max = getattr(grid, "pms_eep_max", None)
+                if pms_max is not None:
+                    eep_lo = int(grid.eep_range[0])
+            # Clamp [Fe/H] to each grid's actual coverage; age uses the
+            # common-measure interval computed above.
             grid_feh_lo = max(self._feh_range[0], float(grid.feh_values[0]))
             grid_feh_hi = min(self._feh_range[1], float(grid.feh_values[-1]))
-            grid_age_lo = max(self._age_range[0], float(grid.age_values[0]))
-            grid_age_hi = min(self._age_range[1], float(grid.age_values[-1]))
+            grid_age_lo = common_age_lo
+            grid_age_hi = common_age_hi
             # Rotation range for grids with a Vini axis (e.g. STAREVOL)
             vini_range = None
             if hasattr(grid, "vini_values") and grid.vini_values is not None:

@@ -214,9 +214,15 @@ class MISTGrid:
     def eep_range(self) -> tuple[int, int]:
         return int(self._eep_values[0]), int(self._eep_values[-1])
 
+    # Highest EEP still on the pre-main-sequence (MIST scheme: 1-201 PMS,
+    # 202 = ZAMS). Declaring it marks this grid as carrying PMS models the
+    # Fitter may unblock via ``Fitter.include_pms``; grids on a mass- or
+    # row-index EEP axis must NOT declare it, since 202 is meaningless there.
+    pms_eep_max = 201
+
     @property
     def fitting_eep_range(self) -> tuple[int, int]:
-        """ZAMS (202) to TPAGB (808), excludes PMS."""
+        """ZAMS (202) to TPAGB (808), excludes PMS by default."""
         return (max(202, int(self._eep_values[0])), min(808, int(self._eep_values[-1])))
 
     @property
@@ -369,9 +375,15 @@ class MISTModelGrid:
     def eep_range(self) -> tuple[int, int]:
         return int(self._eep_values[0]), int(self._eep_values[-1])
 
+    # Highest EEP still on the pre-main-sequence (MIST scheme: 1-201 PMS,
+    # 202 = ZAMS). Declaring it marks this grid as carrying PMS models the
+    # Fitter may unblock via ``Fitter.include_pms``; grids on a mass- or
+    # row-index EEP axis must NOT declare it, since 202 is meaningless there.
+    pms_eep_max = 201
+
     @property
     def fitting_eep_range(self) -> tuple[int, int]:
-        """ZAMS (202) to TPAGB (808), excludes PMS."""
+        """ZAMS (202) to TPAGB (808), excludes PMS by default."""
         return (max(202, int(self._eep_values[0])), min(808, int(self._eep_values[-1])))
 
     @property

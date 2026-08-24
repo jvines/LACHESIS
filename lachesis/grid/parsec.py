@@ -249,6 +249,21 @@ class PARSECModelGrid:
     def eep_range(self) -> tuple[int, int]:
         return int(self._eep_values[0]), int(self._eep_values[-1])
 
+    # NO pms_eep_max: PARSEC deliberately does not opt into Fitter.include_pms.
+    # Its EEP<202 band is anchored on PARSEC's own phase label 0->1 transition
+    # (see rebuild_parsec_eep.py), and that label stays 0 well past the ZAMS, so
+    # the band is contaminated with main-sequence models. Measured against
+    # MIST's PMS mass ceiling at the same age and [Fe/H]=0: 1.3x too massive at
+    # log_age 7 (2.476 vs 1.877 Msun), 2.0x at log_age 8 (1.286 vs 0.656), and
+    # 4.7x at log_age 9 (0.650 vs 0.137) -- a 0.65 Msun star has been on the MS
+    # for ~800 Myr by then. Opening it drove a B9V main-sequence star (ASASSN-21js,
+    # 3.05 Msun, 285 Myr) to a 2 Myr "PMS" solution with PARSEC taking 0.66 of
+    # the BMA weight, and PARSEC scored 14 log-units below MIST on a genuinely
+    # pre-main-sequence target. A radius-inflation test against each mass's own
+    # minimum radius in this cube reproduces MIST's ceiling to 1% at log_age 7
+    # (1.899 Msun) and is the route to re-enabling this, once the threshold is
+    # calibrated across the age axis.
+
     @property
     def fitting_eep_range(self) -> tuple[int, int]:
         """ZAMS (202) to TPAGB (808), PARSEC uses MIST's EEP scheme."""
