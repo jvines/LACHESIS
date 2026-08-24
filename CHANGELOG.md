@@ -1,5 +1,52 @@
 # Changelog
 
+## [1.0.7] - 2026-08-24
+
+### Added
+- `Fitter.include_pms` (default `False`) samples the pre-main-sequence on grids
+  that carry it. MIST and PARSEC both hold PMS models down to log t = 5.0, but
+  `fitting_eep_range` was hard-coded to (202, 808) -- ZAMS onward -- so a young
+  star could not be fitted at all: at log t = 7.0 the allowed band holds no cool
+  dwarfs, only 576-1125 Rsun supergiants, and below log t ~ 6.7 it is empty.
+  Combined with the hard-walled KDE priors that `Star.from_ariadne` installs on
+  Teff, log g, radius, distance, Av and luminosity, an upstream posterior for an
+  inflated young star put every proposal at -inf, so every grid was dropped and
+  the fit died reporting the star as outside all grid coverage. Without those
+  priors the same fit instead rails to the old end. Only grids declaring
+  `pms_eep_max` opt in, since EEP is not a common coordinate --
+  basti/bhac15/geneva/yapsi/dartmouth/starevol index by mass or row.
+
+  Turn it on only for targets independently known to be young. The PMS is
+  degenerate with the post-main-sequence in Teff/log g, and for intermediate
+  masses the posterior goes bimodal; on an old control the spurious sub-100 Myr
+  tail ran to 7-14% across realisations.
+
+### Changed
+- The age interval is now the intersection across the selected grids instead of
+  each grid falling back to its own native minimum. The ceiling was already
+  equalised by the `age_range` default sitting below every grid's maximum, but
+  the floor was not, so mist/parsec sampled from log t = 8.0 while
+  dartmouth/basti started at 9.0 -- unequal support inside an evidence
+  comparison. The default five-grid set is now pinned to 9.0 by dartmouth/basti,
+  which also keeps the PMS unreachable there; a deliberate mist+parsec selection
+  keeps the young range. **This moves results for field stars between 0.1 and
+  1 Gyr.**
+
+- PARSEC does not opt into `include_pms`. Its EEP < 202 band is anchored on
+  PARSEC's own phase label 0->1 transition, which stays 0 well past the ZAMS, so
+  the band is contaminated with main-sequence models: measured against MIST's
+  PMS mass ceiling it is 1.3x too massive at log t = 7, 2.0x at log t = 8 and
+  4.7x at log t = 9, where a 0.65 Msun star has been on the main sequence for
+  ~800 Myr. Opening it drove a B9V main-sequence star (3.06 Msun, 280 Myr) to a
+  2 Myr solution with PARSEC taking 0.66 of the BMA weight, while on a genuinely
+  young target PARSEC scored 14 log-units below MIST. PMS fits are therefore
+  MIST-only for now.
+
+### Removed
+- `Fitter.eep_range`. It never had any effect -- every shipped grid defines
+  `fitting_eep_range`, so the branch reading it was unreachable -- and it cannot
+  work as a global knob because EEP means different things per grid.
+
 ## [1.0.6] - 2026-08-20
 
 ### Changed
