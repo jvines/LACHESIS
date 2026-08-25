@@ -1,5 +1,44 @@
 # Changelog
 
+## [1.0.9] - 2026-08-24
+
+### Changed
+- **MIST is now v2.5; v1.2 is dropped.** MIST v2.5 moves from the Asplund et al.
+  (2009) solar abundance scale to GS98, so Z at [Fe/H] = 0 goes 0.0143 -> 0.0164,
+  and it is computed on MESA r11701 rather than r7503. Results shift: roughly
+  1-2% in mass, up to 6.6% in Teff near the 1 Gyr turnoff and -2.5% at 100 Myr.
+  The [Fe/H] and age axes are unchanged (same 15 metallicities, same 107 ages);
+  only the EEP axis grows, 1711 -> 1722, from v2.5's new post-AGB anchors.
+
+  The wheel cannot carry both cubes, so v1.2 is removed rather than kept
+  alongside. It stays reachable by pinning `lachesis-grids<0.0.9`, since old
+  releases persist on PyPI.
+
+  v2.5 does not distribute theoretical isochrones the way v1.2 did, so the cube
+  is built from the photometric iso files, which carry the full theoretical block
+  anyway; the magnitudes are discarded. `delta_nu` and `nu_max` are therefore NaN
+  -- they are absent from those files and cannot be recovered from a scaling
+  relation (checked against v1.2's own values: Dnu off 9% with 21% scatter,
+  nu_max 15% scatter, so MIST is not using one). Nothing in LACHESIS reads
+  either column.
+
+- Every shipped cube is now written with the HDF5 shuffle filter and gzip -9.
+  It is worth ~30% on these float arrays and is transparent on read. This is why
+  adopting v2.5 *shrinks* the grid package rather than growing it: the wheel goes
+  from 95.3 MB to 72.2 MB, restoring headroom against PyPI's 100 MiB cap.
+  `parsec_v1.25.h5` was shipped unshuffled in 0.0.8 and is re-written here,
+  25 -> 17 MB.
+
+### Added
+- `scripts/build_mist25.py`, which builds the MIST v2.5 cube. It also writes the
+  full [a/Fe] cube (5 values, -0.2 to +0.6, ~222 MB) that v2.5 adds and v1.2
+  lacked. That cube is archived rather than shipped -- it is far past the PyPI
+  file cap -- so the data is kept for when a second alpha-enhanced grid makes an
+  [a/Fe] BMA possible. The shipped cube is its [a/Fe] = 0 slice, with a shape and
+  column set identical to the old v1.2 cube so `load_grid_hdf5`,
+  `_sort_axes_inplace` and `_refresh_dm_deep_inplace` are untouched. Note the
+  upstream set has no `feh_p050_afe_p6`, so that corner of the archive is empty.
+
 ## [1.0.8] - 2026-08-24
 
 ### Changed

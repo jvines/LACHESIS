@@ -95,7 +95,7 @@ def _grid_min_logg(grid) -> float | None:
 
 
 _GRID_REGISTRY = {
-    "mist": ("lachesis.grid.mist", "MISTModelGrid", "mist_v1.2_vvcrit0.4.h5"),
+    "mist": ("lachesis.grid.mist", "MISTModelGrid", "mist_v2.5_vvcrit0.4.h5"),
     "parsec": ("lachesis.grid.parsec", "PARSECModelGrid", "parsec_v1.25.h5"),
     "dartmouth": ("lachesis.grid.dartmouth", "DartmouthModelGrid", "dartmouth_dsep.h5"),
     "basti": ("lachesis.grid.basti", "BaSTIModelGrid", "basti.h5"),

@@ -42,14 +42,14 @@ def mist_h5_path() -> Path | None:
     """
     try:
         from lachesis_grids import grid_path
-        p = grid_path("mist_v1.2_vvcrit0.4.h5")
+        p = grid_path("mist_v2.5_vvcrit0.4.h5")
         if p.exists():
             return p
     except Exception:
         pass
     grid_dir = os.environ.get("LACHESIS_GRID_DIR")
     if grid_dir:
-        p = Path(grid_dir) / "mist_v1.2_vvcrit0.4.h5"
+        p = Path(grid_dir) / "mist_v2.5_vvcrit0.4.h5"
         if p.exists():
             return p
     return None

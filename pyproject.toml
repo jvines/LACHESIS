@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "astroLACHESIS"
-version = "1.0.8"
+version = "1.0.9"
 description = "Isochrone fitting with Bayesian Model Averaging"
 readme = "README.md"
 license = { text = "MIT" }
@@ -32,10 +32,10 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    # >=0.0.8 ships parsec_v1.25.h5, the track-anchored PARSEC cube; earlier
-    # releases ship parsec_v1.2S_eeprebuild.h5, which the registry no longer
-    # resolves to, so an older grids package fails at initialize().
-    "lachesis-grids>=0.0.8",
+    # >=0.0.9 ships mist_v2.5_vvcrit0.4.h5 and parsec_v1.25.h5; earlier releases
+    # ship mist_v1.2_vvcrit0.4.h5, which the registry no longer resolves to, so an
+    # older grids package fails at initialize(). Pin <0.0.9 to reproduce v1.2 runs.
+    "lachesis-grids>=0.0.9",
     "numpy",
     "scipy",
     "h5py",

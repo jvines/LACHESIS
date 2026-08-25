@@ -22,7 +22,7 @@ def _resolve_grid_dir() -> Path:
             "(a dependency of astroLACHESIS) or set LACHESIS_GRID_DIR to a grid "
             "directory."
         ) from exc
-    return _grid_path("mist_v1.2_vvcrit0.4.h5").parent
+    return _grid_path("mist_v2.5_vvcrit0.4.h5").parent
 
 
 GRID_DIR = _resolve_grid_dir()
