@@ -98,16 +98,17 @@ def bayesian_model_average(
             stacklevel=2,
         )
 
-    # Resample from each model proportional to its weight
-    total_samples = sum(len(r["samples"]) for r in results)
-    n_per_model = np.round(weights * total_samples).astype(int)
-    # Ensure at least 1 sample per model with nonzero weight
-    n_per_model = np.maximum(n_per_model, (weights > 0).astype(int))
-    if n_per_model.sum() == 0:
+    # Each per-grid posterior already contains equally weighted samples.
+    n_samples = np.array(
+        [len(r["samples"]) for r in results], dtype=int
+    )
+    if np.any(n_samples == 0):
         raise ValueError(
-            "Model averaging drew zero samples from every model "
-            f"(weights={weights}). The combined posterior would be empty."
+            "There are empty model posteriors."
+            f"n_samples={n_samples}. Cannot perform model averaging."
         )
+
+    total_samples = int(n_samples.sum())
 
     all_samples = []
     all_derived = {}
@@ -125,14 +126,10 @@ def bayesian_model_average(
         )
     derived_keys = sorted(derived_keys)
 
-    for result, name, n_draw in zip(results, names, n_per_model):
+    for result, name in zip(results, names):
         samples = result["samples"]
         derived = result["derived"]
-
-        if n_draw >= len(samples):
-            idx = np.arange(len(samples))
-        else:
-            idx = rng.choice(len(samples), size=n_draw, replace=False)
+        idx = np.arange(len(samples))
 
         all_samples.append(samples[idx])
         all_model_labels.extend([name] * len(idx))
@@ -153,6 +150,26 @@ def bayesian_model_average(
     for key in derived_keys:
         combined_derived[key] = np.concatenate(all_derived[key])
     combined_derived["model"] = np.array(all_model_labels)
+
+    # Grid k has total probability weights[k], which is shared equally
+    # among its n_samples[k] posterior draws.
+    sample_weights = np.repeat(weights / n_samples, n_samples)
+
+    cdf = np.cumsum(sample_weights)
+    cdf /= cdf[-1]
+    cdf[-1] = 1.0
+
+    # Systematic resampling at evenly spaced positions with random offset.
+    positions = (rng.random() + np.arange(total_samples)) / total_samples
+    resample_idx = np.searchsorted(cdf, positions, side="right")
+    rng.shuffle(resample_idx)
+
+    # Preserve alignment between parameters, derived quantities, and labels.
+    combined_samples = combined_samples[resample_idx]
+    combined_derived = {
+        key: values[resample_idx]
+        for key, values in combined_derived.items()
+    }
 
     per_grid_samples = {n: r["samples"] for n, r in zip(names, results)}
     per_grid_derived = {n: r["derived"] for n, r in zip(names, results)}
