@@ -184,3 +184,33 @@ class TestBMAForbiddenGrids:
 
         defaults = set(Fitter()._grids)
         assert not (defaults & {"geneva", "bhac15", "starevol"})
+
+@pytest.mark.parametrize("sizes", [(100, 100), (100, 1000)])
+def test_bma_resampling_matches_weights_and_preserves_alignment(sizes):
+    results = [
+        _make_fake_result(np.log(0.9), 0.1, sizes[0], 42),
+        _make_fake_result(np.log(0.1), 0.1, sizes[1], 43),
+    ]
+
+    for result in results:
+        result["derived"]["row_id"] = result["samples"][:, 0].copy()
+
+    bma = bayesian_model_average(
+        results,
+        names=["A", "B"],
+        rng=np.random.default_rng(123),
+    )
+
+    n = sum(sizes)
+    assert len(bma.samples) == n
+
+    counts = np.array([
+        np.count_nonzero(bma.derived["model"] == name)
+        for name in bma.model_names
+    ])
+    np.testing.assert_allclose(
+        counts, n * bma.weights, rtol=0, atol=1
+    )
+    np.testing.assert_array_equal(
+        bma.derived["row_id"], bma.samples[:, 0]
+    )
