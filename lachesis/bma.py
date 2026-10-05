@@ -104,7 +104,7 @@ def bayesian_model_average(
     )
     if np.any(n_samples == 0):
         raise ValueError(
-            "There are empty model posteriors."
+            "There are empty model posteriors. "
             f"n_samples={n_samples}. Cannot perform model averaging."
         )
 
@@ -129,19 +129,19 @@ def bayesian_model_average(
     for result, name in zip(results, names):
         samples = result["samples"]
         derived = result["derived"]
-        idx = np.arange(len(samples))
+        n = len(samples)
 
-        all_samples.append(samples[idx])
-        all_model_labels.extend([name] * len(idx))
+        all_samples.append(samples)
+        all_model_labels.extend([name] * n)
 
         for key in derived_keys:
             if key not in all_derived:
                 all_derived[key] = []
             vals = derived[key]
             if isinstance(vals, np.ndarray):
-                all_derived[key].append(vals[idx])
+                all_derived[key].append(vals)
             else:
-                all_derived[key].append(np.full(len(idx), vals))
+                all_derived[key].append(np.full(n, vals))
 
     # Concatenate
     combined_samples = np.concatenate(all_samples, axis=0)
