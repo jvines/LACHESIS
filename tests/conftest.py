@@ -17,6 +17,20 @@ SAMPLE_ISO = TEST_DATA / "MIST_v1.2_feh_p0.00_afe_p0.0_vvcrit0.4_basic.iso"
 FULL_ISO = TEST_DATA / "MIST_v1.2_feh_p0.00_afe_p0.0_vvcrit0.4_full.iso"
 
 
+@pytest.fixture(autouse=True)
+def _no_live_esa(monkeypatch):
+    """Treat the ESA Gaia archive as unavailable unless a test patches it.
+
+    Tests that mock VizieR with None simulate a VizieR failure, which sends
+    the Gaia queries to ESA. Without this, those tests would hit the live
+    archive, and when its sync queue is full the async retry would consume
+    TAP results queued for a different query.
+    """
+    from lachesis.librarian import _api
+
+    monkeypatch.setattr(_api, "_esa_first_row", lambda adql: None)
+
+
 @pytest.fixture
 def sample_iso_path():
     """Path to a real MIST .iso file (basic 25-col)."""

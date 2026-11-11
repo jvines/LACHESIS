@@ -324,6 +324,9 @@ def _patch_all_queries():
         "gaia_tap": patch(
             "lachesis.librarian.Gaia.launch_job_async", side_effect=Exception("no TAP")
         ),
+        "gaia_tap_sync": patch(
+            "lachesis.librarian.Gaia.launch_job", side_effect=Exception("no TAP")
+        ),
         "mast": patch(
             "lachesis.librarian.Catalogs.query_region", return_value=None
         ),
@@ -438,6 +441,119 @@ class TestGaiaParams:
         assert d == 100.0
         # max(100-95, 106-100) = max(5, 6) = 6
         assert d_e == 6.0
+
+
+# ── ESA Gaia archive fallback ───────────────────────────────────
+
+from lachesis.librarian import _api as _lib_api
+
+_ESA_SOURCE = {
+    "source_id": 12345, "ra": 10.0, "dec": -20.0, "pmra": 5.0, "pmdec": -3.0,
+    "parallax": 10.0, "parallax_error": 0.1, "ruwe": 1.1,
+    "phot_g_mean_mag": 8.5, "phot_g_mean_flux_over_error": 5000.0,
+    "phot_bp_mean_mag": 8.9, "phot_bp_mean_flux_over_error": 2000.0,
+    "phot_rp_mean_mag": 8.0, "phot_rp_mean_flux_over_error": 3000.0,
+}
+_ESA_FLAME = {
+    "radius_flame": 1.0, "radius_flame_lower": 0.9, "radius_flame_upper": 1.1,
+    "lum_flame": 1.5, "lum_flame_lower": 1.2, "lum_flame_upper": 1.8,
+    "mass_flame": 1.0, "mass_flame_lower": 0.9, "mass_flame_upper": 1.1,
+    "age_flame": 4.6, "age_flame_lower": 3.0, "age_flame_upper": 6.0,
+}
+_ESA_BJ = {"r_med_geo": 100.0, "r_lo_geo": 95.0, "r_hi_geo": 106.0}
+
+
+def _fake_esa(adql):
+    """Stand-in for _esa_first_row keyed on the table each query reads."""
+    if "astrophysical_parameters" in adql:
+        return dict(_ESA_FLAME)
+    if "gaiaedr3_distance" in adql:
+        return dict(_ESA_BJ)
+    if "gaia_source" in adql:
+        return dict(_ESA_SOURCE)
+    return None
+
+
+class TestEsaGaiaFallback:
+    def _make_lib(self, vizier_result, esa=_fake_esa):
+        """Librarian with every VizieR constraint query returning vizier_result."""
+        patches = _patch_all_queries()
+        patches["vizier_qc"] = patch(
+            "lachesis.librarian.Vizier.query_constraints",
+            return_value=vizier_result,
+        )
+        patches["esa"] = patch.object(_lib_api, "_esa_first_row", side_effect=esa)
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            lib = Librarian(0.0, 0.0, gaia_id=12345, verbose=False)
+        finally:
+            for p in patches.values():
+                p.stop()
+        return lib, mocks["esa"]
+
+    def test_mag_err_adds_zero_point_like_vizier(self):
+        # VizieR's e_Gmag is the flux term and the Riello+21 zero point in
+        # quadrature; a bright star's error is set by the zero point.
+        e = _lib_api._gaia_mag_err(1e4, _lib_api._GAIA_ZP_ERR["G"])
+        assert e == pytest.approx(np.hypot(2.5 / np.log(10) / 1e4, 0.0027553202))
+        assert round(e, 4) == 0.0028
+
+    @pytest.mark.parametrize("foe", [None, 0.0, -1.0, np.nan])
+    def test_mag_err_invalid_flux_over_error(self, foe):
+        assert _lib_api._gaia_mag_err(foe, 0.0028) is None
+
+    def test_main_row_uses_vizier_names(self):
+        row = _lib_api._vizier_gaia_main(_ESA_SOURCE)
+        assert row["Plx"] == 10.0 and row["e_Plx"] == 0.1 and row["RUWE"] == 1.1
+        assert row["Gmag"] == 8.5 and row["RPmag"] == 8.0
+        assert row["e_BPmag"] == pytest.approx(
+            np.hypot(2.5 / np.log(10) / 2000.0, 0.0027901700))
+
+    def test_vizier_failure_reads_gaia_from_esa(self):
+        lib, esa = self._make_lib(vizier_result=None)
+        plx, plx_e = lib.parallax
+        assert plx == pytest.approx(10.037)
+        assert lib.ruwe == 1.1
+        g, g_e = lib.magnitudes["Gaia_G"]
+        assert g == 8.5
+        assert g_e == pytest.approx(np.hypot(2.5 / np.log(10) / 5000.0, 0.0027553202))
+        assert lib.radius == pytest.approx((1.0, 0.5))
+        assert lib.luminosity == pytest.approx((1.5, 0.3))
+        assert lib.distance == (100.0, 6.0)
+        tables = [c.args[0] for c in esa.call_args_list]
+        assert any("gaiadr3.gaia_source" in q for q in tables)
+        assert any("astrophysical_parameters" in q for q in tables)
+        assert any("gaiaedr3_distance" in q for q in tables)
+
+    def test_vizier_empty_flame_and_distance_do_not_query_esa(self):
+        # An empty VizieR answer means the source has no FLAME row or distance;
+        # only a failed query goes to ESA. The main row is fetched from ESA
+        # because a known source_id must exist.
+        lib, esa = self._make_lib(vizier_result=[])
+        tables = [c.args[0] for c in esa.call_args_list]
+        assert len(tables) == 1 and "gaiadr3.gaia_source" in tables[0]
+        assert lib.radius is None
+        assert lib.distance is None
+
+    def test_esa_failure_leaves_star_without_gaia(self):
+        lib, _ = self._make_lib(vizier_result=None, esa=lambda adql: None)
+        assert lib.parallax is None
+        assert lib.distance is None
+        assert "Gaia_G" not in lib.magnitudes
+
+    def test_resolve_gaia_id_falls_back_to_esa(self):
+        failing = MagicMock()
+        failing.return_value.query_region.side_effect = Exception("CDS down")
+        lib = Librarian.__new__(Librarian)
+        lib._gaia_id = None
+        lib._coord = _lib_api.SkyCoord(ra=10.0, dec=-20.0, unit="deg")
+        lib._search_radius = 3.0 * _lib_api.u.arcsec
+        with patch.object(_lib_api, "Vizier", failing), \
+                patch.object(_lib_api, "_esa_first_row",
+                             return_value={"source_id": 777, "ang_sep": 1e-5}) as esa:
+            lib._resolve_gaia_id()
+        assert lib._gaia_id == 777
+        assert "CONTAINS" in esa.call_args.args[0]
 
 
 # ── Crossmatch tests ────────────────────────────────────────────

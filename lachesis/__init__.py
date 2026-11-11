@@ -1,6 +1,11 @@
 """LACHESIS, Isochrone fitting with Bayesian Model Averaging."""
 
-__version__ = "1.0.6"
+try:
+    from importlib.metadata import version as _version
+
+    __version__ = _version("astroLACHESIS")
+except Exception:
+    __version__ = "1.0.10"
 
 from lachesis.star import Star
 from lachesis.fitter import Fitter
