@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.10] - 2026-11-11
+
+### Fixed
+- **Model averaging now preserves the evidence weights.** Each grid's draw count
+  was `round(w_k * N)` but capped at the samples that grid had, so a grid whose
+  weight exceeded its share of the pooled samples was under-represented in the
+  combined posterior. The pooled samples are now resampled systematically with
+  per-sample weight `w_k / n_k`, which reproduces the weights exactly.
+- `lachesis.__version__` and the version written into fit outputs were
+  hard-coded to 1.0.6 and have been wrong since 1.0.7. They now report the
+  installed version.
+
+### Added
+- **ESA Gaia archive fallback.** When a VizieR query fails, the Gaia DR3 source
+  row, the FLAME parameters, the Bailer-Jones distance and the Gaia ID cone
+  search are read from the ESA Gaia archive instead (`gaiadr3.gaia_source`,
+  `gaiadr3.astrophysical_parameters`, `external.gaiaedr3_distance`), so a CDS
+  outage no longer leaves stars without parallax, Gaia photometry or distance.
+  An empty VizieR answer still means the source has no FLAME or distance entry;
+  only a failed query goes to ESA. Gaia magnitude errors include the Riello et
+  al. (2021) zero-point term on both paths, matching VizieR's `e_Gmag`. ESA
+  queries run synchronously first and retry as async jobs when ESA's sync queue
+  is full.
+
 ## [1.0.9] - 2026-08-24
 
 ### Changed
