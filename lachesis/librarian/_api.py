@@ -10,6 +10,7 @@ Ported from astroARIADNE with cleaner declarative structure.
 __all__ = ["Librarian"]
 
 import logging
+import socket
 import warnings
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -21,9 +22,10 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from astroquery.gaia import Gaia
 from astroquery.mast import Catalogs
-from astroquery.vizier import Vizier as _VizierClass
 from astroquery.xmatch import XMatch
 from regions import CircleSkyRegion
+
+from . import _cds
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +34,10 @@ warnings.filterwarnings("ignore", category=UserWarning, append=True)
 # Local Vizier instance, never mutate the module-level singleton, which is
 # shared across the whole Python process and breaks any other consumer of
 # astroquery in the same interpreter.
-Vizier = _VizierClass(row_limit=-1, columns=["all"], timeout=60)
+Vizier = _cds.MirroredVizier(row_limit=-1, columns=["all"], timeout=60)
 Gaia.TIMEOUT = 60
-XMatch.TIMEOUT = 60
+XMatch.TIMEOUT = _cds.connect_read(60)
+_XMATCH_PORT = 443 if XMatch.URL.startswith("https") else 80
 Catalogs.TIMEOUT = 60
 
 # Shared executor used by _with_timeout, avoids per-call pool spawn/teardown.
@@ -89,6 +92,29 @@ def _with_timeout(func, *args, timeout=_QUERY_TIMEOUT, **kwargs):
     except Exception as e:
         logger.warning("Query failed: %s", e)
         return None
+
+
+def _cds_reachable(host, port, timeout=_cds.CONNECT_TIMEOUT):
+    """True when a TCP connection to host:port opens within ``timeout``."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _xmatch(**kw):
+    """XMatch.query, reproduced from VizieR cone queries when CDS xMatch is down.
+
+    Looks up the module-level ``XMatch`` at call time so test patches apply.
+    astroquery retries a dead xMatch host for over a minute, longer than
+    ``_with_timeout`` allows, so an unreachable host is detected up front and
+    sent straight to the local reproduction.
+    """
+    if not _cds.breaker.is_down(_cds.XMATCH_HOST) and not _cds_reachable(
+            _cds.XMATCH_HOST, _XMATCH_PORT):
+        _cds.breaker.trip(_cds.XMATCH_HOST, "TCP connect failed")
+    return _cds.xmatch(client=XMatch, timeout=60, **kw)
 
 
 def _tap_query(service, query, timeout=_QUERY_TIMEOUT):
@@ -466,7 +492,7 @@ class Librarian:
         if self._gaia_id is not None:
             return
         cats = _with_timeout(
-            Vizier(columns=["Source", "+_r"]).query_region,
+            _cds.MirroredVizier(columns=["Source", "+_r"]).query_region,
             self._coord, radius=self._search_radius, catalog="I/355/gaiadr3",
         )
         if cats is None:
@@ -689,7 +715,7 @@ class Librarian:
             vizier_cat, id_cols = _XMATCH_CONFIG[cat_name]
 
             xm = _with_timeout(
-                XMatch.query,
+                _xmatch,
                 cat1="vizier:I/355/gaiadr3",
                 cat2=vizier_cat,
                 max_distance=self._search_radius,
@@ -723,8 +749,12 @@ class Librarian:
                 # Tycho-2: composite TYC1-TYC2-TYC3 ID
                 if cat_name == "TYCHO2":
                     try:
+                        # Gaia DR3's own TYC2 column (its Tycho-2 cross-match
+                        # ID) clashes with Tycho-2's TYC2, which the xMatch
+                        # result therefore carries as TYC2_2.
+                        t2 = "TYC2_2" if "TYC2_2" in xm.colnames else "TYC2"
                         tyc_id = (
-                            f"{int(row['TYC1'])}-{int(row['TYC2'])}-{int(row['TYC3'])}"
+                            f"{int(row['TYC1'])}-{int(row[t2])}-{int(row['TYC3'])}"
                         )
                         self._ids["TYCHO2"] = tyc_id
                     except (KeyError, ValueError):
@@ -991,7 +1021,7 @@ class Librarian:
         """Query GALEX via VizieR XMatch with Gaia DR3."""
         region = CircleSkyRegion(self._coord, radius=self._search_radius)
         xm = _with_timeout(
-            XMatch.query,
+            _xmatch,
             cat1="vizier:I/355/gaiadr3",
             cat2="vizier:II/312/ais",
             max_distance=self._search_radius,
@@ -1027,7 +1057,7 @@ class Librarian:
         """
         region = CircleSkyRegion(self._coord, radius=5 * u.arcmin)
         xm = _with_timeout(
-            XMatch.query,
+            _xmatch,
             cat1="vizier:I/355/gaiadr3",
             cat2="vizier:II/168/ubvmeans",
             max_distance=3 * u.arcmin,
@@ -1089,7 +1119,7 @@ class Librarian:
 
         for cat2, max_dist in xm_configs:
             xm = _with_timeout(
-                XMatch.query,
+                _xmatch,
                 cat1="vizier:I/355/gaiadr3",
                 cat2=cat2,
                 max_distance=max_dist,
