@@ -5,7 +5,7 @@ try:
 
     __version__ = _version("astroLACHESIS")
 except Exception:
-    __version__ = "1.0.10"
+    __version__ = "1.0.11"
 
 from lachesis.star import Star
 from lachesis.fitter import Fitter
@@ -67,15 +67,18 @@ def fit(starname, ra=None, dec=None, gaia_id=None,
             # Try to get Gaia DR3 ID from Simbad if not provided
             if gaia_id is None:
                 try:
+                    import requests
                     from astroquery.simbad import Simbad
-                    ids = Simbad.query_objectids(starname)
+                    from .librarian import _cds
+                    ids = _cds.simbad("query_objectids", starname, client=Simbad)
                     if ids is not None and "ID" in ids.colnames:
                         for row in ids:
                             rid = str(row["ID"])
                             if "Gaia DR3" in rid:
                                 gaia_id = int(rid.split()[-1])
                                 break
-                except (NameResolveError, ValueError, KeyError) as e:
+                except (NameResolveError, ValueError, KeyError,
+                        requests.RequestException) as e:
                     # Simbad lookup failed for the Gaia ID; carry on with
                     # ra/dec only.
                     import warnings

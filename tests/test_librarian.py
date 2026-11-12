@@ -535,6 +535,18 @@ class TestEsaGaiaFallback:
         assert lib.radius is None
         assert lib.distance is None
 
+    def test_mirror_empty_flame_and_distance_are_confirmed_with_esa(self):
+        # CfA answers Source=<id> on I/355/paramp with an empty table even when
+        # it holds the row; while CDS is down an empty answer is checked with ESA.
+        from lachesis.librarian import _cds
+        _cds.breaker.trip(_lib_api._PRIMARY_VIZIER, "test")
+        lib, esa = self._make_lib(vizier_result=[])
+        tables = [c.args[0] for c in esa.call_args_list]
+        assert any("astrophysical_parameters" in q for q in tables)
+        assert any("gaiaedr3_distance" in q for q in tables)
+        assert lib.radius == pytest.approx((1.0, 0.5))
+        assert lib.distance == (100.0, 6.0)
+
     def test_esa_failure_leaves_star_without_gaia(self):
         lib, _ = self._make_lib(vizier_result=None, esa=lambda adql: None)
         assert lib.parallax is None
@@ -548,7 +560,7 @@ class TestEsaGaiaFallback:
         lib._gaia_id = None
         lib._coord = _lib_api.SkyCoord(ra=10.0, dec=-20.0, unit="deg")
         lib._search_radius = 3.0 * _lib_api.u.arcsec
-        with patch.object(_lib_api, "Vizier", failing), \
+        with patch.object(_lib_api._cds, "MirroredVizier", failing), \
                 patch.object(_lib_api, "_esa_first_row",
                              return_value={"source_id": 777, "ang_sep": 1e-5}) as esa:
             lib._resolve_gaia_id()

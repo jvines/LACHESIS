@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.11] - 2026-11-12
+
+### Added
+- **Failover for every CDS call.** A CDS Strasbourg outage takes down VizieR,
+  xMatch and SIMBAD together, and previously only the Gaia queries had a
+  fallback. Now every VizieR query is retried on the CfA mirror
+  (`vizier.cfa.harvard.edu`; override with `CDS_VIZIER_MIRRORS`), xMatch is
+  reproduced locally from two VizieR cone queries (GALEX, Mermilliod, Stromgren
+  and the catalogue-ID recovery all use it), and the SIMBAD Gaia-ID lookup falls
+  over to `simbad.harvard.edu` (`CDS_SIMBAD_MIRRORS`). A host that fails is
+  skipped for 10 minutes (`CDS_DOWN_SECONDS`), so a dead primary costs one
+  connect timeout per process. A genuine empty VizieR answer is never retried.
+  The new module is `lachesis/librarian/_cds.py`.
+- **Mirror data integrity.** The CfA mirror returns shifted, corrupt values for
+  default (`-out=*`) and explicit column lists, so requests sent to a mirror
+  always ask for `-out.all`. A mirror database error arrives as an empty
+  HTTP 200; it is retried (`CDS_MIRROR_TRIES`, default 5) and then raised,
+  so the caller takes its own fallback instead of reading "not in catalogue".
+  Error responses astroquery cached during an outage are deleted.
+- While CDS itself is down, an empty FLAME or Bailer-Jones answer from the
+  mirror is confirmed with the ESA archive: CfA answers `Source=<id>` on
+  `I/355/paramp` with an empty table even when it holds the row.
+
 ## [1.0.10] - 2026-11-11
 
 ### Fixed
