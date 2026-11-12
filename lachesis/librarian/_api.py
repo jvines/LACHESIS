@@ -10,7 +10,6 @@ Ported from astroARIADNE with cleaner declarative structure.
 __all__ = ["Librarian"]
 
 import logging
-import socket
 import warnings
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -37,7 +36,6 @@ warnings.filterwarnings("ignore", category=UserWarning, append=True)
 Vizier = _cds.MirroredVizier(row_limit=-1, columns=["all"], timeout=60)
 Gaia.TIMEOUT = 60
 XMatch.TIMEOUT = _cds.connect_read(60)
-_XMATCH_PORT = 443 if XMatch.URL.startswith("https") else 80
 Catalogs.TIMEOUT = 60
 
 # Shared executor used by _with_timeout, avoids per-call pool spawn/teardown.
@@ -94,26 +92,11 @@ def _with_timeout(func, *args, timeout=_QUERY_TIMEOUT, **kwargs):
         return None
 
 
-def _cds_reachable(host, port, timeout=_cds.CONNECT_TIMEOUT):
-    """True when a TCP connection to host:port opens within ``timeout``."""
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
 def _xmatch(**kw):
     """XMatch.query, reproduced from VizieR cone queries when CDS xMatch is down.
 
     Looks up the module-level ``XMatch`` at call time so test patches apply.
-    astroquery retries a dead xMatch host for over a minute, longer than
-    ``_with_timeout`` allows, so an unreachable host is detected up front and
-    sent straight to the local reproduction.
     """
-    if not _cds.breaker.is_down(_cds.XMATCH_HOST) and not _cds_reachable(
-            _cds.XMATCH_HOST, _XMATCH_PORT):
-        _cds.breaker.trip(_cds.XMATCH_HOST, "TCP connect failed")
     return _cds.xmatch(client=XMatch, timeout=60, **kw)
 
 
@@ -749,12 +732,8 @@ class Librarian:
                 # Tycho-2: composite TYC1-TYC2-TYC3 ID
                 if cat_name == "TYCHO2":
                     try:
-                        # Gaia DR3's own TYC2 column (its Tycho-2 cross-match
-                        # ID) clashes with Tycho-2's TYC2, which the xMatch
-                        # result therefore carries as TYC2_2.
-                        t2 = "TYC2_2" if "TYC2_2" in xm.colnames else "TYC2"
                         tyc_id = (
-                            f"{int(row['TYC1'])}-{int(row[t2])}-{int(row['TYC3'])}"
+                            f"{int(row['TYC1'])}-{int(row['TYC2'])}-{int(row['TYC3'])}"
                         )
                         self._ids["TYCHO2"] = tyc_id
                     except (KeyError, ValueError):

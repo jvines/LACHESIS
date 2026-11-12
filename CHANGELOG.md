@@ -11,12 +11,14 @@
   and the catalogue-ID recovery all use it), and the SIMBAD Gaia-ID lookup falls
   over to `simbad.harvard.edu` (`CDS_SIMBAD_MIRRORS`). A host that fails is
   skipped for 10 minutes (`CDS_DOWN_SECONDS`), so a dead primary costs one
-  connect timeout per process. An empty VizieR answer is never retried.
+  connect timeout per process. A genuine empty VizieR answer is never retried.
   The new module is `lachesis/librarian/_cds.py`.
-
-### Fixed
-- The Tycho-2 ID recovered through xMatch read Gaia DR3's own `TYC2` column
-  instead of Tycho-2's (renamed `TYC2_2` by the clash), so it was always lost.
+- **Mirror data integrity.** The CfA mirror returns shifted, corrupt values for
+  default (`-out=*`) and explicit column lists, so requests sent to a mirror
+  always ask for `-out.all`. A mirror database error arrives as an empty
+  HTTP 200; it is retried (`CDS_MIRROR_TRIES`, default 5) and then raised,
+  so the caller takes its own fallback instead of reading "not in catalogue".
+  Error responses astroquery cached during an outage are deleted.
 
 ## [1.0.10] - 2026-11-11
 

@@ -100,7 +100,7 @@ def _no_live_cds(monkeypatch):
     _down.real = _cds.local_xmatch  # tests of the fallback itself restore this
     _cds.breaker.clear()
     monkeypatch.setattr(_cds, "local_xmatch", _down)
-    _always.real = _api._cds_reachable
-    monkeypatch.setattr(_api, "_cds_reachable", _always)
+    _always.real = _cds._reachable
+    monkeypatch.setattr(_cds, "_reachable", _always)
     yield
     _cds.breaker.clear()

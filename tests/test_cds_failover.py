@@ -156,11 +156,12 @@ def test_local_xmatch_pairs_and_layout(real_local_xmatch, monkeypatch):
     out = _cds.local_xmatch("vizier:I/355/gaiadr3", "vizier:II/x",
                             5 * u.arcsec, area=AREA)
     assert len(out) == 1
-    assert out.colnames == ["angDist", "Source", "RA_ICRS", "DE_ICRS", "Gmag",
-                            "RA_ICRS_2", "DE_ICRS_2", "Gmag_2", "id"]
+    # The counterpart keeps clashing names; Gaia's become <name>_1, except Source.
+    assert out.colnames == ["angDist", "Source", "RA_ICRS_1", "DE_ICRS_1", "Gmag_1",
+                            "RA_ICRS", "DE_ICRS", "Gmag", "id"]
     assert out["Source"][0] == 1 and out["id"][0] == "a"
     assert out["angDist"][0] == pytest.approx(1.0, abs=1e-3)
-    assert out["Gmag_2"][0] == 9.0
+    assert out["Gmag"][0] == 9.0 and out["Gmag_1"][0] == 10.0
 
 
 def test_local_xmatch_empty(real_local_xmatch, monkeypatch):
@@ -220,7 +221,7 @@ def test_api_xmatch_skips_cds_when_tcp_connect_fails(monkeypatch):
 
     client = MagicMock()
     monkeypatch.setattr(_api, "XMatch", client)
-    monkeypatch.setattr(_api, "_cds_reachable", lambda *a, **k: False)
+    monkeypatch.setattr(_cds, "_reachable", lambda *a, **k: False)
     monkeypatch.setattr(_cds, "local_xmatch", lambda *a, **k: "local")
     assert _api._xmatch(cat1="vizier:a", cat2="vizier:b",
                         max_distance=1 * u.arcsec, area=AREA) == "local"
@@ -233,8 +234,8 @@ def test_cds_reachable_false_on_refused(monkeypatch):
 
     def refuse(*a, **k):
         raise OSError("refused")
-    monkeypatch.setattr(_api.socket, "create_connection", refuse)
-    assert _api._cds_reachable.real("example.invalid", 80, timeout=1) is False
+    monkeypatch.setattr(_cds.socket, "create_connection", refuse)
+    assert _cds._reachable.real("http://example.invalid/x", timeout=1) is False
 
 
 def test_xmatch_does_not_fall_back_on_other_errors(monkeypatch):
@@ -363,12 +364,12 @@ def test_star_name_lookup_goes_through_simbad_failover(monkeypatch):
     assert captured["g_id"] == 123456789
 
 
-def test_tycho_id_reads_the_renamed_tycho_column():
-    """Gaia DR3 has its own TYC2 column, so Tycho-2's TYC2 arrives as TYC2_2."""
+def test_tycho_id_reads_the_tycho_column_not_gaias():
+    """Gaia DR3 has its own TYC2; the counterpart keeps the bare name."""
     from lachesis.librarian import _api
 
-    xm = Table({"angDist": [0.5], "Source": [7], "TYC2": ["1707-00767-1"],
-                "TYC1": [1707], "TYC2_2": [767], "TYC3": [1]})
+    xm = Table({"angDist": [0.5], "Source": [7], "TYC2_1": ["1707-00767-1"],
+                "TYC1": [1707], "TYC2": [767], "TYC3": [1]})
     lib = _api.Librarian.__new__(_api.Librarian)
     lib._coord = SkyCoord(1 * u.deg, 2 * u.deg)
     lib._search_radius = 3 * u.arcsec
