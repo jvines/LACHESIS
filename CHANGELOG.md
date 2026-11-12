@@ -19,6 +19,9 @@
   HTTP 200; it is retried (`CDS_MIRROR_TRIES`, default 5) and then raised,
   so the caller takes its own fallback instead of reading "not in catalogue".
   Error responses astroquery cached during an outage are deleted.
+- While CDS itself is down, an empty FLAME or Bailer-Jones answer from the
+  mirror is confirmed with the ESA archive: CfA answers `Source=<id>` on
+  `I/355/paramp` with an empty table even when it holds the row.
 
 ## [1.0.10] - 2026-11-11
 
