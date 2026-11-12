@@ -77,3 +77,30 @@ def parsec_raw_dir() -> Path | None:
         if p.exists() and list(p.glob("*.csv")):
             return p
     return None
+
+
+@pytest.fixture(autouse=True)
+def _no_live_cds(monkeypatch):
+    """Keep the CDS failovers off the network unless a test says otherwise.
+
+    Tests that mock XMatch as failing would otherwise fall through to the
+    local xMatch and cone-query the live VizieR mirror. The failure breaker
+    is process-global, so it is reset around every test.
+    """
+    import requests
+
+    from lachesis.librarian import _api, _cds
+
+    def _always(*args, **kwargs):
+        return True
+
+    def _down(*args, **kwargs):
+        raise requests.ConnectionError("local xMatch disabled in tests")
+
+    _down.real = _cds.local_xmatch  # tests of the fallback itself restore this
+    _cds.breaker.clear()
+    monkeypatch.setattr(_cds, "local_xmatch", _down)
+    _always.real = _cds._reachable
+    monkeypatch.setattr(_cds, "_reachable", _always)
+    yield
+    _cds.breaker.clear()

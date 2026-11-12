@@ -21,9 +21,10 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from astroquery.gaia import Gaia
 from astroquery.mast import Catalogs
-from astroquery.vizier import Vizier as _VizierClass
 from astroquery.xmatch import XMatch
 from regions import CircleSkyRegion
+
+from . import _cds
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +33,9 @@ warnings.filterwarnings("ignore", category=UserWarning, append=True)
 # Local Vizier instance, never mutate the module-level singleton, which is
 # shared across the whole Python process and breaks any other consumer of
 # astroquery in the same interpreter.
-Vizier = _VizierClass(row_limit=-1, columns=["all"], timeout=60)
+Vizier = _cds.MirroredVizier(row_limit=-1, columns=["all"], timeout=60)
 Gaia.TIMEOUT = 60
-XMatch.TIMEOUT = 60
+XMatch.TIMEOUT = _cds.connect_read(60)
 Catalogs.TIMEOUT = 60
 
 # Shared executor used by _with_timeout, avoids per-call pool spawn/teardown.
@@ -89,6 +90,14 @@ def _with_timeout(func, *args, timeout=_QUERY_TIMEOUT, **kwargs):
     except Exception as e:
         logger.warning("Query failed: %s", e)
         return None
+
+
+def _xmatch(**kw):
+    """XMatch.query, reproduced from VizieR cone queries when CDS xMatch is down.
+
+    Looks up the module-level ``XMatch`` at call time so test patches apply.
+    """
+    return _cds.xmatch(client=XMatch, timeout=60, **kw)
 
 
 def _tap_query(service, query, timeout=_QUERY_TIMEOUT):
@@ -466,7 +475,7 @@ class Librarian:
         if self._gaia_id is not None:
             return
         cats = _with_timeout(
-            Vizier(columns=["Source", "+_r"]).query_region,
+            _cds.MirroredVizier(columns=["Source", "+_r"]).query_region,
             self._coord, radius=self._search_radius, catalog="I/355/gaiadr3",
         )
         if cats is None:
@@ -689,7 +698,7 @@ class Librarian:
             vizier_cat, id_cols = _XMATCH_CONFIG[cat_name]
 
             xm = _with_timeout(
-                XMatch.query,
+                _xmatch,
                 cat1="vizier:I/355/gaiadr3",
                 cat2=vizier_cat,
                 max_distance=self._search_radius,
@@ -991,7 +1000,7 @@ class Librarian:
         """Query GALEX via VizieR XMatch with Gaia DR3."""
         region = CircleSkyRegion(self._coord, radius=self._search_radius)
         xm = _with_timeout(
-            XMatch.query,
+            _xmatch,
             cat1="vizier:I/355/gaiadr3",
             cat2="vizier:II/312/ais",
             max_distance=self._search_radius,
@@ -1027,7 +1036,7 @@ class Librarian:
         """
         region = CircleSkyRegion(self._coord, radius=5 * u.arcmin)
         xm = _with_timeout(
-            XMatch.query,
+            _xmatch,
             cat1="vizier:I/355/gaiadr3",
             cat2="vizier:II/168/ubvmeans",
             max_distance=3 * u.arcmin,
@@ -1089,7 +1098,7 @@ class Librarian:
 
         for cat2, max_dist in xm_configs:
             xm = _with_timeout(
-                XMatch.query,
+                _xmatch,
                 cat1="vizier:I/355/gaiadr3",
                 cat2=cat2,
                 max_distance=max_dist,

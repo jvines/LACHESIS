@@ -548,7 +548,7 @@ class TestEsaGaiaFallback:
         lib._gaia_id = None
         lib._coord = _lib_api.SkyCoord(ra=10.0, dec=-20.0, unit="deg")
         lib._search_radius = 3.0 * _lib_api.u.arcsec
-        with patch.object(_lib_api, "Vizier", failing), \
+        with patch.object(_lib_api._cds, "MirroredVizier", failing), \
                 patch.object(_lib_api, "_esa_first_row",
                              return_value={"source_id": 777, "ang_sep": 1e-5}) as esa:
             lib._resolve_gaia_id()
