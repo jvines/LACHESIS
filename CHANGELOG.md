@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Failover for every CDS call.** A CDS Strasbourg outage takes down VizieR,
+  xMatch and SIMBAD together, and previously only the Gaia queries had a
+  fallback. Now every VizieR query is retried on the CfA mirror
+  (`vizier.cfa.harvard.edu`; override with `CDS_VIZIER_MIRRORS`), xMatch is
+  reproduced locally from two VizieR cone queries (GALEX, Mermilliod, Stromgren
+  and the catalogue-ID recovery all use it), and the SIMBAD Gaia-ID lookup falls
+  over to `simbad.harvard.edu` (`CDS_SIMBAD_MIRRORS`). A host that fails is
+  skipped for 10 minutes (`CDS_DOWN_SECONDS`), so a dead primary costs one
+  connect timeout per process. An empty VizieR answer is never retried.
+  The new module is `lachesis/librarian/_cds.py`.
+
+### Fixed
+- The Tycho-2 ID recovered through xMatch read Gaia DR3's own `TYC2` column
+  instead of Tycho-2's (renamed `TYC2_2` by the clash), so it was always lost.
+
 ## [1.0.10] - 2026-11-11
 
 ### Fixed
