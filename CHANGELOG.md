@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.11] - 2026-11-12
 
 ### Added
 - **Failover for every CDS call.** A CDS Strasbourg outage takes down VizieR,

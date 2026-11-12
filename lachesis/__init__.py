@@ -5,7 +5,7 @@ try:
 
     __version__ = _version("astroLACHESIS")
 except Exception:
-    __version__ = "1.0.10"
+    __version__ = "1.0.11"
 
 from lachesis.star import Star
 from lachesis.fitter import Fitter
