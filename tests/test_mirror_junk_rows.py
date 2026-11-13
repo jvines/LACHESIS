@@ -252,3 +252,24 @@ def test_failed_cone_only_id_lookup_is_recorded():
                       side_effect=Exception("VizieR down")):
         lib._xmatch_fallback(["SkyMapper"])
     assert lib.failed_queries == ["SkyMapper ID"]
+
+
+# ── Crossmatched source missing from the VizieR answer ───────────────
+
+
+def test_crossmatched_source_missing_from_mirror_answer_is_a_failure():
+    from lachesis.librarian._api import _CATALOGS, _PRIMARY_VIZIER
+    lib = _bare_lib()
+    _cds.breaker.trip(_PRIMARY_VIZIER, "test")
+    lib._fetch_standard("2MASS", _CATALOGS["2MASS"], {}, "13425502-4124038")
+    assert lib.failed_queries == [
+        "II/246/out (mirror answer lacks the crossmatched 2MASS source)"]
+
+
+def test_crossmatched_source_missing_from_cds_answer_is_not_a_failure():
+    from lachesis.librarian._api import _CATALOGS
+    lib = _bare_lib()
+    tbl = Table({"_r": [0.5], "_2MASS": ["00000000-0000000"], "Jmag": [5.0]})
+    lib._fetch_standard("2MASS", _CATALOGS["2MASS"], {"II/246/out": tbl},
+                        "13425502-4124038")
+    assert lib.failed_queries == []

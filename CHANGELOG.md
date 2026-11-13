@@ -3,6 +3,19 @@
 ## [Unreleased]
 
 ### Fixed
+- **False empty answers from the CfA mirror are no longer cached.** The
+  mirror sometimes answers "nothing here" for a source it holds, with no
+  error and nothing to tell it from a real empty (HIP 66924's 2MASS cone,
+  2026-11-13; the row came back minutes later). astroquery cached those and
+  replayed them on every rerun, so stars silently lost 2MASS, WISE and
+  Stromgren. An empty answer from a mirror is now never cached and is asked
+  once more; poisoned cache entries are purged when next read. When a
+  mirror's answer lacks a source the crossmatch says exists, that is a
+  failed query, not an absent source.
+- **The mirror's overload answer is a database error.** "ERROR : temporary
+  unavailable" / "(pipe) Request has been interrupted" arrive as HTTP 200 and
+  read as empty; they are now retried like the other database errors and
+  never cached. Permanent errors ("Table ... does not exist") are not.
 - **Empty rows from the CfA mirror are dropped.** The mirror puts an all-empty
   row first in some answers (`Source=0` on `I/352/gedr3dis`, `RAJ2000=0` on
   `II/246/out`). Code that read row 0 got a NaN Bailer-Jones distance, which

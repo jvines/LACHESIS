@@ -905,6 +905,22 @@ class Librarian:
         if "STROMGREN" not in self._ignore:
             self._fetch_stromgren()
 
+    def _crossmatched_but_missing(self, cat_name, cat_def):
+        """The star has a crossmatched ID in this catalogue but the VizieR
+        answer holds no such row.
+
+        From CDS that can be a real positional miss (high proper motion). From
+        a mirror it is the mirror's false empty answer (see
+        ``_cds._empty_votable``), so it is recorded as a failed query.
+        """
+        if cat_def.vizier_id in self.failed_queries:
+            return  # already recorded by the per-catalogue retry
+        if _cds.breaker.is_down(_PRIMARY_VIZIER):
+            self._query_failed(f"{cat_def.vizier_id} (mirror answer lacks the "
+                               f"crossmatched {cat_name} source)")
+        else:
+            logger.info("No VizieR data for %s", cat_name)
+
     def _fetch_standard(self, cat_name, cat_def, cats, ext_id):
         """Fetch photometry from VizieR results, filtered by crossmatched ID."""
         if cat_def.vizier_id is None:
@@ -914,7 +930,7 @@ class Librarian:
             cat = cats[cat_def.vizier_id]
             cat.sort("_r")
         except (TypeError, KeyError):
-            logger.info("No VizieR data for %s", cat_name)
+            self._crossmatched_but_missing(cat_name, cat_def)
             return
 
         # Filter by crossmatched ID
@@ -946,6 +962,7 @@ class Librarian:
 
         matched = cat[mask]
         if len(matched) == 0:
+            self._crossmatched_but_missing(cat_name, cat_def)
             return
         row = matched[0]
 
