@@ -1,0 +1,383 @@
+# Changelog
+
+## [Unreleased]
+
+### Fixed
+- **Malformed VOTables from the mirror are retried.** The CfA mirror
+  intermittently serves VOTables that are not well-formed XML; they are now
+  retried like a database error and never cached. The CDS failover module
+  is again identical to astroARIADNE's and MOIRAI's.
+- **False empty answers from the CfA mirror are no longer cached.** The
+  mirror sometimes answers "nothing here" for a source it holds, with no
+  error and nothing to tell it from a real empty (HIP 66924's 2MASS cone,
+  2026-11-13; the row came back minutes later). astroquery cached those and
+  replayed them on every rerun, so stars silently lost 2MASS, WISE and
+  Stromgren. An empty answer from a mirror is now never cached and is asked
+  once more; poisoned cache entries are purged when next read. When a
+  mirror's answer lacks a source the crossmatch says exists, that is a
+  failed query, not an absent source.
+- **The mirror's overload answer is a database error.** "ERROR : temporary
+  unavailable" / "(pipe) Request has been interrupted" arrive as HTTP 200 and
+  read as empty; they are now retried like the other database errors and
+  never cached. Permanent errors ("Table ... does not exist") are not.
+- **Empty rows from the CfA mirror are dropped.** The mirror puts an all-empty
+  row first in some answers (`Source=0` on `I/352/gedr3dis`, `RAJ2000=0` on
+  `II/246/out`). Code that read row 0 got a NaN Bailer-Jones distance, which
+  then failed the fit with a NaN-width distance prior, or lost the 2MASS
+  bands. Every VizieR result now drops rows with no finite, non-zero number.
+  A masked or non-finite Bailer-Jones row falls back to ESA, and `Star`
+  treats a non-finite distance as missing and uses the parallax.
+- **One unparseable table no longer costs every standard catalogue.** The
+  bulk VizieR query for 2MASS, WISE, Pan-STARRS, SDSS, Tycho-2 and GLIMPSE
+  failed as a whole when one table was malformed (AllWISE on the mirror,
+  2026-11-13), and all six read as "not in catalogue". A failed bulk query
+  is now retried per catalogue.
+
+### Added
+- **`Librarian.failed_queries` and `Star.failed_queries`.** Queries that error
+  or time out (Gaia DR3 on VizieR and ESA, Bailer-Jones, catalogue-ID lookups
+  when ESA's best_neighbour tables are down, each standard catalogue, TIC,
+  APASS, SkyMapper, GALEX, Mermilliod, Stromgren) are listed,
+  with a warning, instead of reading as absent. Batch runs should refuse a
+  star with any, since its photometry is incomplete.
+
+## [1.0.11] - 2026-11-12
+
+### Added
+- **Failover for every CDS call.** A CDS Strasbourg outage takes down VizieR,
+  xMatch and SIMBAD together, and previously only the Gaia queries had a
+  fallback. Now every VizieR query is retried on the CfA mirror
+  (`vizier.cfa.harvard.edu`; override with `CDS_VIZIER_MIRRORS`), xMatch is
+  reproduced locally from two VizieR cone queries (GALEX, Mermilliod, Stromgren
+  and the catalogue-ID recovery all use it), and the SIMBAD Gaia-ID lookup falls
+  over to `simbad.harvard.edu` (`CDS_SIMBAD_MIRRORS`). A host that fails is
+  skipped for 10 minutes (`CDS_DOWN_SECONDS`), so a dead primary costs one
+  connect timeout per process. A genuine empty VizieR answer is never retried.
+  The new module is `lachesis/librarian/_cds.py`.
+- **Mirror data integrity.** The CfA mirror returns shifted, corrupt values for
+  default (`-out=*`) and explicit column lists, so requests sent to a mirror
+  always ask for `-out.all`. A mirror database error arrives as an empty
+  HTTP 200; it is retried (`CDS_MIRROR_TRIES`, default 5) and then raised,
+  so the caller takes its own fallback instead of reading "not in catalogue".
+  Error responses astroquery cached during an outage are deleted.
+- While CDS itself is down, an empty FLAME or Bailer-Jones answer from the
+  mirror is confirmed with the ESA archive: CfA answers `Source=<id>` on
+  `I/355/paramp` with an empty table even when it holds the row.
+
+## [1.0.10] - 2026-11-11
+
+### Fixed
+- **Model averaging now preserves the evidence weights.** Each grid's draw count
+  was `round(w_k * N)` but capped at the samples that grid had, so a grid whose
+  weight exceeded its share of the pooled samples was under-represented in the
+  combined posterior. The pooled samples are now resampled systematically with
+  per-sample weight `w_k / n_k`, which reproduces the weights exactly.
+- `lachesis.__version__` and the version written into fit outputs were
+  hard-coded to 1.0.6 and have been wrong since 1.0.7. They now report the
+  installed version.
+
+### Added
+- **ESA Gaia archive fallback.** When a VizieR query fails, the Gaia DR3 source
+  row, the FLAME parameters, the Bailer-Jones distance and the Gaia ID cone
+  search are read from the ESA Gaia archive instead (`gaiadr3.gaia_source`,
+  `gaiadr3.astrophysical_parameters`, `external.gaiaedr3_distance`), so a CDS
+  outage no longer leaves stars without parallax, Gaia photometry or distance.
+  An empty VizieR answer still means the source has no FLAME or distance entry;
+  only a failed query goes to ESA. Gaia magnitude errors include the Riello et
+  al. (2021) zero-point term on both paths, matching VizieR's `e_Gmag`. ESA
+  queries run synchronously first and retry as async jobs when ESA's sync queue
+  is full.
+
+## [1.0.9] - 2026-08-24
+
+### Changed
+- **MIST is now v2.5; v1.2 is dropped.** MIST v2.5 moves from the Asplund et al.
+  (2009) solar abundance scale to GS98, so Z at [Fe/H] = 0 goes 0.0143 -> 0.0164,
+  and it is computed on MESA r11701 rather than r7503. Results shift: roughly
+  1-2% in mass, up to 6.6% in Teff near the 1 Gyr turnoff and -2.5% at 100 Myr.
+  The [Fe/H] and age axes are unchanged (same 15 metallicities, same 107 ages);
+  only the EEP axis grows, 1711 -> 1722, from v2.5's new post-AGB anchors.
+
+  The wheel cannot carry both cubes, so v1.2 is removed rather than kept
+  alongside. It stays reachable by pinning `lachesis-grids<0.0.9`, since old
+  releases persist on PyPI.
+
+  v2.5 does not distribute theoretical isochrones the way v1.2 did, so the cube
+  is built from the photometric iso files, which carry the full theoretical block
+  anyway; the magnitudes are discarded. `delta_nu` and `nu_max` are therefore NaN
+  -- they are absent from those files and cannot be recovered from a scaling
+  relation (checked against v1.2's own values: Dnu off 9% with 21% scatter,
+  nu_max 15% scatter, so MIST is not using one). Nothing in LACHESIS reads
+  either column.
+
+- Every shipped cube is now written with the HDF5 shuffle filter and gzip -9.
+  It is worth ~30% on these float arrays and is transparent on read. This is why
+  adopting v2.5 *shrinks* the grid package rather than growing it: the wheel goes
+  from 95.3 MB to 72.2 MB, restoring headroom against PyPI's 100 MiB cap.
+  `parsec_v1.25.h5` was shipped unshuffled in 0.0.8 and is re-written here,
+  25 -> 17 MB.
+
+### Added
+- `scripts/build_mist25.py`, which builds the MIST v2.5 cube. It also writes the
+  full [a/Fe] cube (5 values, -0.2 to +0.6, ~222 MB) that v2.5 adds and v1.2
+  lacked. That cube is archived rather than shipped -- it is far past the PyPI
+  file cap -- so the data is kept for when a second alpha-enhanced grid makes an
+  [a/Fe] BMA possible. The shipped cube is its [a/Fe] = 0 slice, with a shape and
+  column set identical to the old v1.2 cube so `load_grid_hdf5`,
+  `_sort_axes_inplace` and `_refresh_dm_deep_inplace` are untouched. Note the
+  upstream set has no `feh_p050_afe_p6`, so that corner of the archive is empty.
+
+## [1.0.8] - 2026-08-24
+
+### Changed
+- PARSEC is rebuilt with EEPs anchored on the evolutionary tracks and ships as
+  `parsec_v1.25.h5` (lachesis-grids >= 0.0.8), replacing
+  `parsec_v1.2S_eeprebuild.h5`. The previous cube anchored the ZAMS on PARSEC's
+  own phase label, which is non-monotonic in mass -- at log t = 9 the runs are
+  `0: 0.090-0.170`, `1: 0.200` (a single point), `0: 0.239-0.600`,
+  `1: 0.650-2.009`, and at log t = 6.7 there are four separate label-0 runs, the
+  last reaching 38.7 Msun. It also marks stars pre-main-sequence long past the
+  ZAMS: against MIST's PMS mass ceiling the boundary ran 1.3x too massive at
+  log t = 7, 2.0x at log t = 8 and 4.8x at log t = 9, where a 0.65 Msun star has
+  been on the main sequence for ~800 Myr.
+
+  The isochrones cannot fix this themselves -- they carry no central hydrogen
+  (`X` is surface, `Xc` is carbon) -- so the anchors now come from the PARSEC
+  v1.2S tracks, taking the ZAMS where gravitational contraction ceases
+  (`|L_GRAV| < 0.01`, equivalently `LX > 0.99`). A fixed central-hydrogen
+  threshold is not used: it jumps 0.8 dex across the fully convective boundary.
+  The rebuilt boundary lands within ~10% of MIST at every age, the grid's own
+  fabrication metric improves from 10.2% to 9.5%, homology stays at Spearman
+  +1.000, and post-MS values are bit-identical since that path is untouched.
+
+- PARSEC therefore opts back into `Fitter.include_pms`, reversing the 1.0.7
+  exclusion, and pre-main-sequence fits are a real two-grid BMA again. On a
+  7-10 Myr target PARSEC's log-evidence goes from 7.79 (weight 0.000) to 25.02
+  (weight 0.890), above MIST's 22.93. The 1.0.7 failure mode is gone: a 3.06
+  Msun B9V main-sequence star that the old cube dragged to 2 Myr at EEP 151 now
+  returns 298 Myr at EEP 395 with `include_pms` on, against 280 Myr on defaults.
+
+  Note this moves PMS results relative to 1.0.7, which was MIST-only: the same
+  target shifts from 7.1 to 9.9 Myr and 0.560 to 0.699 Msun, now that a second
+  grid carries most of the weight.
+
+### Added
+- `scripts/rebuild_parsec_eep_tracks.py`, which builds the cube above from the
+  raw tracks. Track metallicities do not line up with the isochrone [M/H] axis
+  (four nodes sit more than 0.11 dex from the nearest track set), so the
+  EEP-vs-mass curve is interpolated in [M/H] between bracketing track sets.
+
+### Fixed
+- `lachesis-grids` sdist excluded `_backup/` and nested `dist*/`, which had put
+  it at 147 MB, over PyPI's 100 MiB file cap, while the wheel was fine at 91 MB.
+
+## [1.0.7] - 2026-08-24
+
+### Added
+- `Fitter.include_pms` (default `False`) samples the pre-main-sequence on grids
+  that carry it. MIST and PARSEC both hold PMS models down to log t = 5.0, but
+  `fitting_eep_range` was hard-coded to (202, 808) -- ZAMS onward -- so a young
+  star could not be fitted at all: at log t = 7.0 the allowed band holds no cool
+  dwarfs, only 576-1125 Rsun supergiants, and below log t ~ 6.7 it is empty.
+  Combined with the hard-walled KDE priors that `Star.from_ariadne` installs on
+  Teff, log g, radius, distance, Av and luminosity, an upstream posterior for an
+  inflated young star put every proposal at -inf, so every grid was dropped and
+  the fit died reporting the star as outside all grid coverage. Without those
+  priors the same fit instead rails to the old end. Only grids declaring
+  `pms_eep_max` opt in, since EEP is not a common coordinate --
+  basti/bhac15/geneva/yapsi/dartmouth/starevol index by mass or row.
+
+  Turn it on only for targets independently known to be young. The PMS is
+  degenerate with the post-main-sequence in Teff/log g, and for intermediate
+  masses the posterior goes bimodal; on an old control the spurious sub-100 Myr
+  tail ran to 7-14% across realisations.
+
+### Changed
+- The age interval is now the intersection across the selected grids instead of
+  each grid falling back to its own native minimum. The ceiling was already
+  equalised by the `age_range` default sitting below every grid's maximum, but
+  the floor was not, so mist/parsec sampled from log t = 8.0 while
+  dartmouth/basti started at 9.0 -- unequal support inside an evidence
+  comparison. The default five-grid set is now pinned to 9.0 by dartmouth/basti,
+  which also keeps the PMS unreachable there; a deliberate mist+parsec selection
+  keeps the young range. **This moves results for field stars between 0.1 and
+  1 Gyr.**
+
+- PARSEC does not opt into `include_pms`. Its EEP < 202 band is anchored on
+  PARSEC's own phase label 0->1 transition, which stays 0 well past the ZAMS, so
+  the band is contaminated with main-sequence models: measured against MIST's
+  PMS mass ceiling it is 1.3x too massive at log t = 7, 2.0x at log t = 8 and
+  4.7x at log t = 9, where a 0.65 Msun star has been on the main sequence for
+  ~800 Myr. Opening it drove a B9V main-sequence star (3.06 Msun, 280 Myr) to a
+  2 Myr solution with PARSEC taking 0.66 of the BMA weight, while on a genuinely
+  young target PARSEC scored 14 log-units below MIST. PMS fits are therefore
+  MIST-only for now.
+
+### Removed
+- `Fitter.eep_range`. It never had any effect -- every shipped grid defines
+  `fitting_eep_range`, so the branch reading it was unreachable -- and it cannot
+  work as a global knob because EEP means different things per grid.
+
+## [1.0.6] - 2026-08-20
+
+### Changed
+- Default age prior upper bound lowered from log t = 10.3 (19.95 Gyr) to
+  10.1399 (13.8 Gyr, Planck 2018 age of the universe). Besides removing
+  unphysical super-Hubble ages, this equalizes the age support across grids
+  with different native ceilings (MIST 10.30, PARSEC 10.25,
+  DSEP/BaSTI/YaPSI 10.176), closing a BMA bias where the common-measure
+  evidence correction (`ln(age box)`) rewarded the widest-axis grid exactly
+  on stars whose likelihood rails old, e.g. HD 191939: MIST weight 0.88 ->
+  0.10 and BMA median 18.7 -> 12.1 Gyr after the change. Override via
+  `Fitter.age_range` for grid-systematics experiments.
+
+- Geneva is excluded from BMA, as the README has always documented but nothing
+  enforced, and is removed from the default grid list so `bma = True` on the
+  defaults does not trip the guard. Its coverage (0.5-3.5 Msun, log t 7.5-10.2)
+  is too narrow to put on a common evidence scale with the other grids. Until
+  now the a-posteriori [Fe/H] rail drop removed it by accident, and only while
+  lachesis-grids shipped a solar-only Geneva.
+
+### Fixed
+- The shipped Geneva grid was cited as Ekstroem+ 2012 (0.8-120 Msun, solar
+  metallicity, rotating). It is built by `scripts/build_geneva_mowlavi.py`
+  from the non-rotating Mowlavi+ 2012 grid (VizieR J/A+A/541/A41, Z = 0.006
+  to 0.040, M = 0.5-3.5 Msun), so anyone citing Geneva from a LACHESIS run was
+  citing the wrong paper. `citations.md`, the README grid table and the
+  `geneva.py` docstring are corrected.
+- A metallicity FIXED in the upstream ARIADNE fit arrives as a constant
+  posterior column, and every layer that consumed it failed differently.
+  `gaussian_kde` raised `LinAlgError` only when the covariance evaluated to
+  exactly zero, which depends on the bit pattern of the fixed value: a
+  constant -0.5 raised, a constant -0.13 built a KDE of bandwidth ~1e-18
+  whose mass fell between two nodes of the tabulated inverse CDF, so the
+  normalisation was 0/0 and every draw came back as `feh_lo`. That fit ran
+  to completion with [Fe/H] pinned at the grid's metallicity floor and a zero
+  error bar. [Fe/H] priors are now screened on `np.ptp` and a degenerate one
+  becomes an explicit fixed prior. `prior_setup={'feh': ('fixed', v)}` is
+  recognised (it was silently ignored, falling through to the ARIADNE KDE).
+- The inverse CDF for a KDE [Fe/H] prior is tabulated on the sample support
+  rather than the full prior range. A posterior narrower than one grid cell
+  (2.4e-3 dex on the default range) resolved to one or two nodes, which
+  `np.interp` turns into a pin or a uniform ramp: a posterior at -0.13 with
+  sigma 2e-4 drew a mean of -1.07 with a minimum of -2.0. Realistic
+  posteriors are unaffected (verified to sub-millidex against the old
+  tabulation).
+- Observable uncertainties are validated before use. `np.std` of a constant
+  column is 0 for some values and a ~5.6e-17 residue for others; the first
+  raised a bare `math domain error` out of `log(sigma)` well after
+  `initialize()` had succeeded, and the second displaced each grid's
+  log-evidence by ~1e32 with no error at all, collapsing the BMA onto one
+  grid. `Star.from_ariadne` now reports no uncertainty for a parameter that
+  was fixed upstream, and `Star.observed` / `Star.uncertainties` agree on
+  membership.
+- An upstream Av prior is no longer applied to a star inside the Local
+  Bubble, where `av_range` is None and Av is not sampled. The sampler read it
+  back as None and returned `-inf` for every proposal, so the fit died in
+  dynesty's live-point initialisation and was reported as the star lying
+  outside the coverage of every grid. This affected any ARIADNE-sourced star
+  within 70 pc, whether or not [Fe/H] was fixed.
+- External priors built from a degenerate posterior column are rejected by
+  name instead of skipped with a bare `except LinAlgError: continue`. The
+  silent skip deleted a whole constraint from the likelihood, and tabulating
+  it instead collapsed the 2048-node table onto a single point, after which
+  the sampler rejected every proposal.
+- The [Fe/H] grid-coverage drop was gated on a Gaussian prior, so it never
+  ran on the ARIADNE path, which produces a KDE prior. It now keys on the
+  prior's central value, warns unconditionally rather than only when verbose,
+  and records to `dropped_grids`.
+- Zero-width prior boxes no longer produce infinities. `-log(0)` made
+  `log_prior` `+inf` for a fixed Av, and `log(0)` made the BMA common-scale
+  correction `-inf` for a single-metallicity grid, which reaches
+  `bayesian_model_average` as NaN weights, zero samples drawn from every
+  model, and an empty combined posterior returned as a success.
+  `bayesian_model_average` now refuses a non-finite log-evidence.
+- `_eep_to_state` returned "TP-AGB / post-AGB" for a NaN EEP, because every
+  `eep < threshold` comparison is False for NaN and the loop fell through to
+  the last label. A fit with no posterior reported the most evolved phase
+  there is.
+- A distance prior with a non-positive sigma raises instead of dividing by
+  it, which gave `ZeroDivisionError` for a Python float and silent NaN
+  parameter vectors for a `np.float64`.
+- `show_priors` reported a fixed [Fe/H] as a wide uniform, and a
+  single-metallicity grid as `U(0.00, 0.00)`.
+- `librarian/_api.py`: the RUWE > 1.4 unresolved-binary warning crashed with
+  `NameError` (missing local `termcolor` import), the only unconditional
+  `colored()` call site without one. Any target with RUWE > 1.4 failed to
+  build a `Star` at all.
+
+## [1.0.5] - 2026-07-11
+
+### Changed
+- `prior_transform` hot-path optimizations (~10-15% faster fits, results
+  bit-identical): the per-band jitter draw is vectorized (was a Python loop over
+  bands), and the truncated-normal distance-prior CDF bounds are precomputed
+  once instead of two `ndtr` evaluations per proposal.
+
+## [1.0.4] - 2026-07-11
+
+### Changed
+- Removed the inner per-likelihood `ThreadPool` (previously built when
+  `setup['threads'] > 1`). dynesty calls a GIL-holding Python likelihood closure
+  around a ~20 us njit kernel, so the pool added per-proposal dispatch overhead
+  with no real parallelism, making fits ~1.4x slower and worse the more
+  photometric bands (likelihood calls) there are. Per-grid fits now run
+  single-threaded; BMA parallelism comes from the grid-level process pool
+  (`n_grid_jobs`). A 16-dim per-band fit drops from ~6.5 s to ~4.8 s.
+
+## [1.0.3] - 2026-07-11
+
+### Changed
+- Photometric excess noise is now fit as ONE white-noise term PER photometric
+  band (ARIADNE-style), replacing the single global jitter. Each band's variance
+  is inflated independently: `sigma_eff[k]^2 = sigma_cat[k]^2 + noise[k]^2`,
+  with an independent log-uniform prior per band. The parameter vector is now
+  `5 + n_bands` and the terms are named `<band>_noise` (e.g. `2MASS_J_noise`) to
+  match ARIADNE's output convention.
+
+## [1.0.2] - 2026-07-10
+
+### Fixed
+- The `.nc` posterior `age` variable stored log10(age) instead of age in Gyr:
+  the derived-quantities loop in `to_inference_data` overwrote the correct Gyr
+  conversion with the grid's log-valued `derived['age']`. Affected single-grid
+  and BMA netCDF outputs (the `.dat` `Age(Gyr)` column was already correct).
+  Downstream consumers reading `posterior['age']` from the `.nc` now get Gyr.
+
+## [1.0.1] - 2026-07-09
+
+### Fixed
+- PARSEC grid registry pointed at `parsec_v1.2S.h5`, but lachesis-grids 0.0.3
+  ships the EEP-rebuilt cube as `parsec_v1.2S_eeprebuild.h5`, so any fit
+  including PARSEC crashed with `GridError` at `initialize()`. Broken in 1.0.0.
+- Sort unsorted grid axes at load, permuting the cube (fixes the PARSEC
+  `feh_values` ordering shipped in lachesis-grids 0.0.3).
+- `__version__` now reports the correct version (was `0.0.10` at the 1.0.0 tag).
+
+## [1.0.0] - 2026-07-09
+
+First public release, accompanying the LACHESIS paper (Vines et al., submitted
+to Astronomy & Astrophysics).
+
+### Added
+- Hypatia Catalog as the default [Fe/H] prior source, with the survey chain
+  (PASTEL, APOGEE, GALAH, RAVE, LAMOST) as a fallback.
+- Gaia DR3 RUWE retrieval and an unresolved-binary warning (RUWE > 1.4).
+- Per-grid nested-sampling log-evidence uncertainty (`log_evidence_err`),
+  persisted to `model_weights.dat` and the `.nc` output.
+- Numba-compiled log-likelihood and parallel per-grid fitting.
+- Blackbody and bolometric-correction photometry quality control with
+  errorbar-independent outlier flagging, plus SED plotting.
+- Evolutionary-state classification.
+
+### Changed
+- Missing catalogue magnitude errors now fall through to zero and receive the
+  conservative imputed uncertainty (previously a 0.01/0.02 mag placeholder).
+- Extinction applied through a Fitzpatrick (1999) law with R_V = 3.1.
+
+### Earlier (0.0.x)
+- 0.0.10: drop silent Av=0.1 fallback; raise ExtinctionError on dustmap failure.
+- 0.0.9: auto-drop grids whose [Fe/H] axis is incompatible with the star's prior.
+- 0.0.8: drop Gaia GSP-Phot Teff prior; retry on dynesty/scipy kmeans crash.
+- 0.0.7: fix radius/density linear interpolation through cube corners.
+- 0.0.6: fix `_BMA.dat` sampled-row loss and plotter `gaussian_kde` NameError.
