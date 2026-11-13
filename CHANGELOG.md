@@ -1,5 +1,51 @@
 # Changelog
 
+## [1.0.12] - 2026-11-13
+
+### Fixed
+- **TIC from VizieR when MAST fails.** MAST's catalogue service stalled on
+  2026-11-13 (one TIC query took 401 s, the next failed after 90 s), so every
+  star lost its TESS band. TIC-8 is now read from VizieR (IV/39/tic82,
+  through the mirror failover) when MAST fails, matched on the Gaia ID; the
+  row without a DUPLICATE/SPLIT disposition wins.
+- **Malformed VOTables from the mirror are retried.** The CfA mirror
+  intermittently serves VOTables that are not well-formed XML; they are now
+  retried like a database error and never cached. The CDS failover module
+  is again identical to astroARIADNE's and MOIRAI's.
+- **False empty answers from the CfA mirror are no longer cached.** The
+  mirror sometimes answers "nothing here" for a source it holds, with no
+  error and nothing to tell it from a real empty (HIP 66924's 2MASS cone,
+  2026-11-13; the row came back minutes later). astroquery cached those and
+  replayed them on every rerun, so stars silently lost 2MASS, WISE and
+  Stromgren. An empty answer from a mirror is now never cached and is asked
+  once more; poisoned cache entries are purged when next read. When a
+  mirror's answer lacks a source the crossmatch says exists, that is a
+  failed query, not an absent source.
+- **The mirror's overload answer is a database error.** "ERROR : temporary
+  unavailable" / "(pipe) Request has been interrupted" arrive as HTTP 200 and
+  read as empty; they are now retried like the other database errors and
+  never cached. Permanent errors ("Table ... does not exist") are not.
+- **Empty rows from the CfA mirror are dropped.** The mirror puts an all-empty
+  row first in some answers (`Source=0` on `I/352/gedr3dis`, `RAJ2000=0` on
+  `II/246/out`). Code that read row 0 got a NaN Bailer-Jones distance, which
+  then failed the fit with a NaN-width distance prior, or lost the 2MASS
+  bands. Every VizieR result now drops rows with no finite, non-zero number.
+  A masked or non-finite Bailer-Jones row falls back to ESA, and `Star`
+  treats a non-finite distance as missing and uses the parallax.
+- **One unparseable table no longer costs every standard catalogue.** The
+  bulk VizieR query for 2MASS, WISE, Pan-STARRS, SDSS, Tycho-2 and GLIMPSE
+  failed as a whole when one table was malformed (AllWISE on the mirror,
+  2026-11-13), and all six read as "not in catalogue". A failed bulk query
+  is now retried per catalogue.
+
+### Added
+- **`Librarian.failed_queries` and `Star.failed_queries`.** Queries that error
+  or time out (Gaia DR3 on VizieR and ESA, Bailer-Jones, catalogue-ID lookups
+  when ESA's best_neighbour tables are down, each standard catalogue, TIC,
+  APASS, SkyMapper, GALEX, Mermilliod, Stromgren) are listed,
+  with a warning, instead of reading as absent. Batch runs should refuse a
+  star with any, since its photometry is incomplete.
+
 ## [1.0.11] - 2026-11-12
 
 ### Added
