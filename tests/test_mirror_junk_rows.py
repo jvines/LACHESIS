@@ -226,3 +226,29 @@ def test_star_carries_the_librarian_failures():
     with patch("lachesis.librarian.Librarian", _FakeLib):
         s = Star("x", 10.0, -20.0, Av=0.0, verbose=False)
     assert s.failed_queries == ["II/328/allwise"]
+
+
+# ── Catalogue-ID fallback (Gaia TAP down) ────────────────────────────
+
+
+def test_failed_id_crossmatch_is_recorded_but_no_counterpart_is_not():
+    # With ESA's best_neighbour tables down the IDs come from xMatch; if that
+    # fails too, the catalogue is never queried, so it must not read as absent.
+    def xmatch(cat1=None, cat2=None, **kw):
+        if cat2 == "vizier:II/246/out":
+            raise ValueError("Failed to parse VIZIER result")
+        return Table({"angDist": np.array([], dtype=float)})
+
+    lib = _bare_lib()
+    with patch.object(_api, "_xmatch", side_effect=xmatch):
+        lib._xmatch_fallback(["2MASS", "Wise"])
+    assert lib._ids == {"2MASS": None, "Wise": None}
+    assert lib.failed_queries == ["2MASS ID"]
+
+
+def test_failed_cone_only_id_lookup_is_recorded():
+    lib = _bare_lib()
+    with patch.object(_api.Vizier, "query_region",
+                      side_effect=Exception("VizieR down")):
+        lib._xmatch_fallback(["SkyMapper"])
+    assert lib.failed_queries == ["SkyMapper ID"]
