@@ -18,8 +18,9 @@
 
 ### Added
 - **`Librarian.failed_queries` and `Star.failed_queries`.** Queries that error
-  or time out (Gaia DR3 on VizieR and ESA, Bailer-Jones, each standard
-  catalogue, TIC, APASS, SkyMapper, GALEX, Mermilliod, Stromgren) are listed,
+  or time out (Gaia DR3 on VizieR and ESA, Bailer-Jones, catalogue-ID lookups
+  when ESA's best_neighbour tables are down, each standard catalogue, TIC,
+  APASS, SkyMapper, GALEX, Mermilliod, Stromgren) are listed,
   with a warning, instead of reading as absent. Batch runs should refuse a
   star with any, since its photometry is incomplete.
 
