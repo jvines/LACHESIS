@@ -221,6 +221,41 @@ def test_a_real_empty_answer_is_not_a_database_error():
     assert not _cds._db_error(_Resp(200, CFA, '<INFO name="Error" value="bad column"/>'))
 
 
+# The CfA mirror's overload answer (2026-11-13), verbatim INFO lines.
+OVERLOAD = ('<INFO name="QUERY_STATUS" value="ERROR"/>'
+            '<INFO name="Error" value="(pipe) Request has been interrupted"/>'
+            '<INFO name="Error" value="ERROR : temporary unavailable"/>')
+
+
+def test_mirror_overload_answer_is_a_database_error():
+    assert _cds._db_error(_Resp(200, CFA, OVERLOAD))
+    assert _cds._db_error(_Resp(200, CFA, '<INFO name="Error" '
+                                          'value="ERROR : temporary unavailable"/>'))
+
+
+def test_a_missing_table_is_not_an_outage():
+    # Permanent: retrying is useless and would trip the breaker on CfA.
+    missing = ('<INFO name="QUERY_STATUS" value="ERROR"/><INFO name="Error" '
+               'value="Table \'allstars\' does not exist in catalog: III/286"/>')
+    assert not _cds._db_error(_Resp(200, CFA, missing))
+
+
+def test_mirror_overload_is_retried_not_read_as_empty(monkeypatch):
+    calls = []
+
+    def fake(self, method, url, **kw):
+        calls.append(url.split("/")[2])
+        text = OVERLOAD if len(calls) <= 2 else ""
+        return _Resp(200, url.split("/")[2], text)
+
+    monkeypatch.setattr(_cds.time, "sleep", lambda s: None)
+    monkeypatch.setattr(_cds.VizierClass, "_request", fake)
+    _cds.breaker.trip(CDS, "test")
+    resp = _get(_viz())
+    assert resp.text == "" and calls == [CFA, CFA, CFA]
+    assert not _cds.breaker.is_down(CFA)
+
+
 # ── local xMatch ─────────────────────────────────────────────────────
 
 C = SkyCoord(10.0, -20.0, unit="deg")
@@ -463,3 +498,50 @@ def test_simbad_bad_query_is_not_retried(monkeypatch):
     assert made == []
 
 
+
+
+EMPTY_VOT = ('<?xml version="1.0"?><VOTABLE><RESOURCE></RESOURCE>'
+             '<INFO name="Warning" value="vc_coo can\'t change epoch"/></VOTABLE>')
+ROW_VOT = '<?xml version="1.0"?><VOTABLE><TABLE><DATA><TABLEDATA><TR><TD>1</TD></TR>' \
+          '</TABLEDATA></DATA></TABLE></VOTABLE>'
+
+
+def _fake_seq(monkeypatch, answers):
+    """Fake HTTP returning answers[i] on call i (host -> text); records calls
+    and every cache purge."""
+    calls, forgotten = [], []
+
+    def fake(self, method, url, **kw):
+        host = url.split("/")[2]
+        calls.append(host)
+        return _Resp(200, host, answers[len(calls) - 1])
+
+    monkeypatch.setattr(_cds.time, "sleep", lambda s: None)
+    monkeypatch.setattr(_cds.VizierClass, "_request", fake)
+    monkeypatch.setattr(_cds.MirroredVizier, "_forget",
+                        lambda self, m, u, k: forgotten.append(u.split("/")[2]))
+    return calls, forgotten
+
+
+def test_mirror_empty_answer_is_not_cached_and_asked_again(monkeypatch):
+    # CfA, 2026-11-13: a false empty for a 2MASS cone, the row minutes later.
+    calls, forgotten = _fake_seq(monkeypatch, [EMPTY_VOT, ROW_VOT])
+    _cds.breaker.trip(CDS, "test")
+    resp = _get(_viz())
+    assert "<TR>" in resp.text
+    assert calls == [CFA, CFA] and forgotten == [CFA]
+
+
+def test_mirror_empty_twice_is_returned_uncached_without_tripping(monkeypatch):
+    calls, forgotten = _fake_seq(monkeypatch, [EMPTY_VOT, EMPTY_VOT])
+    _cds.breaker.trip(CDS, "test")
+    resp = _get(_viz())
+    assert "<TR>" not in resp.text
+    assert calls == [CFA, CFA] and forgotten == [CFA, CFA]
+    assert not _cds.breaker.is_down(CFA)
+
+
+def test_primary_empty_answer_is_trusted_and_cached(monkeypatch):
+    calls, forgotten = _fake_seq(monkeypatch, [EMPTY_VOT])
+    resp = _get(_viz())
+    assert resp.host == CDS and calls == [CDS] and forgotten == []
