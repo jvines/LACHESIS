@@ -134,6 +134,29 @@ def _all_columns(data):
     return "\n".join(kept[:1] + ["-out.all"] + kept[1:])
 
 
+def _junk_rows(tbl):
+    """Mask of rows with no finite, non-zero value in any numeric column.
+
+    The CfA mirror puts such a row first in some answers (2026-11-13: Source=0
+    and every other cell masked on I/352/gedr3dis; RAJ2000=0 and the rest
+    masked on II/246/out), so code reading row 0 got a masked distance or lost
+    the 2MASS bands. A real VizieR row always has a position, an ID or a
+    measurement. A table without numeric columns is left alone.
+    """
+    keep = np.zeros(len(tbl), dtype=bool)
+    numeric = False
+    for name in tbl.colnames:
+        col = tbl[name]
+        if getattr(col, "dtype", None) is None or col.dtype.kind not in "iuf":
+            continue
+        numeric = True
+        vals = np.ma.asarray(col, dtype=float).filled(0.0)
+        keep |= np.isfinite(vals) & (vals != 0)
+    if not numeric:
+        return np.zeros(len(tbl), dtype=bool)
+    return ~keep
+
+
 class MirroredVizier(VizierClass):
     """astroquery Vizier that moves to a mirror when a host is down.
 
@@ -143,6 +166,7 @@ class MirroredVizier(VizierClass):
     sent as an empty 200 is not, and is retried. Requests to a mirror always
     ask for ``-out.all`` (see ``_all_columns``). If every host fails the query
     raises, so callers take their own fallback instead of reading "no data".
+    Rows that carry no data are dropped from every result (see ``_junk_rows``).
     """
 
     mirrors = VIZIER_MIRRORS
@@ -152,6 +176,17 @@ class MirroredVizier(VizierClass):
         # Share astroquery's "Vizier" cache directory instead of starting an
         # empty "MirroredVizier" one.
         self.name = "Vizier"
+
+    def _parse_result(self, response, **kwargs):
+        result = super()._parse_result(response, **kwargs)
+        if isinstance(result, list):  # a TableList; anything else passes through
+            for tbl in result:
+                junk = _junk_rows(tbl)
+                if junk.any():
+                    logger.info("Dropped %d empty row(s) from VizieR %s",
+                                int(junk.sum()), tbl.meta.get("name", "table"))
+                    tbl.remove_rows(np.flatnonzero(junk))
+        return result
 
     def _request(self, method, url, *args, **kwargs):
         parts = urlsplit(url)

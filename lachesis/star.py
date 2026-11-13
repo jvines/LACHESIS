@@ -97,6 +97,9 @@ class Star:
         self.g_id = g_id
         self.external_posteriors = {}  # populated by from_ariadne()
         self.feh_posterior = None       # populated by from_ariadne()
+        # Archive queries that errored or timed out: their data is missing,
+        # not absent. Batch runs should refuse a star with any.
+        self.failed_queries = []
 
         if magnitudes is None and not offline:
             if verbose:
@@ -105,6 +108,12 @@ class Star:
                 print(colored(f'\t\t*** LOOKING UP ARCHIVAL INFORMATION ***', c))
             from lachesis.librarian import Librarian
             lib = Librarian(ra, dec, gaia_id=g_id, verbose=verbose)
+            self.failed_queries = list(getattr(lib, "failed_queries", []))
+            if self.failed_queries:
+                logger.warning(
+                    "%s: archive queries failed (%s); the photometry or "
+                    "astrometry they serve is missing from this fit.",
+                    starname, ", ".join(self.failed_queries))
 
             # Bright star warning
             gmag = lib.magnitudes.get("Gaia_G", (None,))[0]
@@ -183,6 +192,16 @@ class Star:
                 "user_supplied" if (logg is not None or feh is not None) else None
             )
             self.spectroscopic_params = None
+
+        # A distance or error that is not finite is no distance: a NaN width
+        # cannot build a prior, so fall back to the parallax below.
+        if self.distance is not None and not (
+            np.isfinite(self.distance)
+            and (self.distance_e is None or np.isfinite(self.distance_e))
+        ):
+            logger.warning("%s: non-finite distance %s +/- %s ignored",
+                           starname, self.distance, self.distance_e)
+            self.distance, self.distance_e = None, None
 
         # Derive distance from parallax if not given
         if self.distance is None and self.parallax is not None and self.parallax > 0:

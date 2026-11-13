@@ -219,6 +219,22 @@ def _esa_gaia_flame(source_id):
     return _vizier_gaia_flame(ap) if ap else ap
 
 
+def _bj_distance(row):
+    """(distance, error) in pc from a Bailer-Jones row, or None when a value
+    is masked, missing or not finite. The error is the wider half of the
+    16-84 interval."""
+    vals = [_col(row, k) for k in ("rgeo", "b_rgeo", "B_rgeo")]
+    if any(v is None for v in vals):
+        return None
+    try:
+        dist, lo, hi = (float(v) for v in vals)
+    except (TypeError, ValueError):
+        return None
+    if not (np.all(np.isfinite([dist, lo, hi])) and dist > 0):
+        return None
+    return dist, max(dist - lo, hi - dist)
+
+
 def _esa_bailer_jones(source_id):
     """Bailer-Jones EDR3 distance row from ESA, VizieR-named."""
     d = _esa_first_row(
@@ -469,6 +485,8 @@ class Librarian:
         self._tic_id: int | None = None
         self._kic_id: int | None = None
         self.Av: float | None = None
+        # Queries that errored or timed out (see _query_failed).
+        self.failed_queries: list[str] = []
 
         self._resolve_gaia_id()
         self._query_gaia_params()
@@ -533,6 +551,9 @@ class Librarian:
             logger.warning("VizieR Gaia DR3 query failed for %d; trying the "
                            "ESA archive", self._gaia_id)
             main = _esa_gaia_main(self._gaia_id)
+        if main is None:
+            self._query_failed("Gaia DR3")
+            return
         if not main:
             logger.warning("Gaia DR3 source %d not found", self._gaia_id)
             return
@@ -781,20 +802,34 @@ class Librarian:
             Vizier.query_constraints,
             catalog="I/352/gedr3dis", Source=str(self._gaia_id),
         )
-        if res is None or _mirror_empty(res):
+        row = None
+        if res is not None and not _mirror_empty(res):
+            row = res[0][0] if len(res) and len(res[0]) else {}
+        if row is None or (row and _bj_distance(row) is None):
+            # VizieR failed, a mirror's empty answer needs confirming, or the
+            # row has masked or non-finite values: read it from ESA.
             row = _esa_bailer_jones(self._gaia_id)
-        else:
-            row = res[0][0] if len(res) and len(res[0]) else None
+        if row is None:
+            self._query_failed("Bailer-Jones distance")
+            return
         if not row:
             return
-        try:
-            dist = float(row["rgeo"])
-            lo = dist - float(row["b_rgeo"])
-            hi = float(row["B_rgeo"]) - dist
-            self._distance = dist
-            self._distance_e = max(lo, hi)
-        except Exception as e:
-            logger.warning("Bailer-Jones row parse failed: %s", e)
+        d = _bj_distance(row)
+        if d is None:
+            logger.warning("Bailer-Jones distance for %d is masked or not "
+                           "finite; none used", self._gaia_id)
+            return
+        self._distance, self._distance_e = d
+
+    def _query_failed(self, what):
+        """Record a query that errored or timed out.
+
+        Its data is missing from this star, which is not the same as the
+        source being absent from the catalogue. Callers that need complete
+        inputs (batch runs) check ``failed_queries`` before fitting.
+        """
+        self.failed_queries.append(what)
+        logger.warning("%s query failed: its data is missing, not absent", what)
 
     # ── Photometry retrieval ─────────────────────────────────────
 
@@ -817,6 +852,22 @@ class Librarian:
                 Vizier.query_region,
                 self._coord, radius=self._search_radius, catalog=viz_ids,
             )
+            if result is None:
+                # One unparseable table fails the whole bulk query (the CfA
+                # mirror sent a malformed AllWISE VOTable on 2026-11-13, which
+                # silently cost every star its 2MASS, WISE and Tycho bands).
+                # Ask per catalogue so the rest survive; record what fails.
+                result = {}
+                for vid in viz_ids:
+                    one = _with_timeout(
+                        Vizier.query_region,
+                        self._coord, radius=self._search_radius, catalog=vid,
+                    )
+                    if one is None:
+                        self._query_failed(vid)
+                        continue
+                    for key in one.keys():
+                        result[key] = one[key]
             if result:
                 cats = result
 
@@ -921,7 +972,10 @@ class Librarian:
             Catalogs.query_region,
             self._coord, radius=self._search_radius, catalog="TIC",
         )
-        if result is None or len(result) == 0:
+        if result is None:
+            self._query_failed("TIC")
+            return
+        if len(result) == 0:
             return
 
         result.sort("dstArcSec")
@@ -968,7 +1022,10 @@ class Librarian:
         )
 
         result = _tap_query(Gaia, query)
-        if result is None or len(result) == 0:
+        if result is None:
+            self._query_failed("APASS")
+            return
+        if len(result) == 0:
             return
 
         row = result[0]
@@ -997,7 +1054,10 @@ class Librarian:
             f"FROM dr2.master WHERE object_id = {int(sm_id)}"
         )
         result = _tap_query(tap, query)
-        if result is None or len(result) == 0:
+        if result is None:
+            self._query_failed("SkyMapper")
+            return
+        if len(result) == 0:
             return
 
         row = result[0]
@@ -1024,7 +1084,10 @@ class Librarian:
             area=region,
         )
         try:
-            if xm is None or len(xm) == 0:
+            if xm is None:
+                self._query_failed("GALEX")
+                return
+            if len(xm) == 0:
                 return
 
             xm.sort("angDist")
@@ -1060,7 +1123,10 @@ class Librarian:
             area=region,
         )
         try:
-            if xm is None or len(xm) == 0:
+            if xm is None:
+                self._query_failed("Mermilliod UBV")
+                return
+            if len(xm) == 0:
                 return
 
             xm.sort("angDist")
@@ -1122,7 +1188,12 @@ class Librarian:
                 area=region,
             )
             try:
-                if xm is None or len(xm) == 0:
+                if xm is None:
+                    # Recorded even if the next catalogue answers: a clean run
+                    # would have taken the preferred catalogue's values.
+                    self._query_failed(f"Stromgren {cat2}")
+                    continue
+                if len(xm) == 0:
                     continue
 
                 xm.sort("angDist")
