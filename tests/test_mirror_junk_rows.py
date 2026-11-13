@@ -188,7 +188,9 @@ def test_working_bulk_query_records_nothing():
 def test_tess_failure_is_recorded_but_absence_is_not():
     lib = _bare_lib()
     with patch.object(_api.Catalogs, "query_region",
-                      side_effect=Exception("MAST down")):
+                      side_effect=Exception("MAST down")), \
+            patch.object(_cds, "tic_from_vizier",
+                         side_effect=Exception("VizieR down")):
         lib._fetch_tess()
     assert lib.failed_queries == ["TIC"]
 
@@ -278,3 +280,52 @@ def test_crossmatched_source_missing_from_cds_answer_is_not_a_failure():
     lib._fetch_standard("2MASS", _CATALOGS["2MASS"], {"II/246/out": tbl},
                         "13425502-4124038")
     assert lib.failed_queries == []
+
+
+# ── TIC from VizieR when MAST fails ──────────────────────────────────
+
+
+def _tic82_cone():
+    # IV/39/tic82 around HIP 10164 (CfA mirror, 2026-11-13): the star, a faint
+    # neighbour, and a DUPLICATE/SPLIT pair sharing one Gaia ID.
+    t = Table()
+    t["TIC"] = [632355485, 632355484, 72651516, 72651515]
+    t["GAIA"] = [5117251502218279680, 5117251502217614848,
+                 5117251502217614848, 5117251502218279552]
+    t["Tmag"] = [12.632, 12.174, 12.174, 6.196]
+    t["e_Tmag"] = [0.01, 0.006, 0.006, 0.006]
+    t["S/G"] = ["STAR"] * 4
+    t["Disp"] = ["", "DUPLICATE", "SPLIT", ""]
+    t["KIC"] = MaskedColumn([0, 0, 0, 0], mask=[True] * 4)
+    return t
+
+
+def test_tic_from_vizier_matches_the_gaia_id_and_skips_dispositions():
+    with patch.object(_cds, "_cone", return_value=_tic82_cone()):
+        row = _cds.tic_from_vizier(None, 10 * u.arcsec, 5117251502218279552)
+        assert row["ID"] == 72651515 and row["Tmag"] == pytest.approx(6.196)
+        assert row["objType"] == "STAR" and row["KIC"] is None
+        dup = _cds.tic_from_vizier(None, 10 * u.arcsec, 5117251502217614848)
+        assert dup is not None
+        assert _cds.tic_from_vizier(None, 10 * u.arcsec, 42) is None
+
+
+def test_tess_comes_from_vizier_when_mast_fails():
+    lib = _bare_lib(_gaia_id=5117251502218279552)
+    with patch.object(_api.Catalogs, "query_region",
+                      side_effect=Exception("MAST down")), \
+            patch.object(_cds, "_cone", return_value=_tic82_cone()):
+        lib._fetch_tess()
+    assert lib.failed_queries == []
+    assert lib._tic_id == 72651515
+    assert lib._magnitudes["TESS"][0] == pytest.approx(6.196)
+
+
+def test_tic_missing_from_a_mirror_answer_is_a_failure():
+    lib = _bare_lib(_gaia_id=5117251502218279552)
+    _cds.breaker.trip(_api._PRIMARY_VIZIER, "test")
+    with patch.object(_api.Catalogs, "query_region",
+                      side_effect=Exception("MAST down")), \
+            patch.object(_cds, "_cone", return_value=None):
+        lib._fetch_tess()
+    assert lib.failed_queries == ["TIC"]

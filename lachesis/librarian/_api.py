@@ -996,25 +996,46 @@ class Librarian:
             err_f = float(err_v) if err_v is not None else 0.0
             self._add_mag(band.pyphot, float(mag_v), err_f)
 
+    def _tic_from_vizier(self):
+        """The TIC-8 row from VizieR after MAST failed; None when there is
+        none. Every Gaia source is in TIC-8, so a miss while CDS is down is
+        the mirror's false empty and is recorded as a failed query, like a
+        VizieR failure."""
+        try:
+            row = _cds.tic_from_vizier(self._coord, self._search_radius,
+                                       self._gaia_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("TIC failed on MAST and on VizieR: %s", exc)
+            self._query_failed("TIC")
+            return None
+        if row is None:
+            if _cds.breaker.is_down(_PRIMARY_VIZIER):
+                self._query_failed("TIC")
+            return None
+        logger.info("TIC served by VizieR %s (MAST failed)", _cds.TIC_VIZIER)
+        return row
+
     def _fetch_tess(self):
-        """Query TESS TIC via MAST, crossmatched on Gaia ID."""
+        """Query TESS TIC via MAST, crossmatched on Gaia ID; TIC-8 from
+        VizieR when MAST fails (see ``_cds.tic_from_vizier``)."""
         result = _with_timeout(
             Catalogs.query_region,
             self._coord, radius=self._search_radius, catalog="TIC",
         )
         if result is None:
-            self._query_failed("TIC")
-            return
-        if len(result) == 0:
-            return
+            row = self._tic_from_vizier()
+            if row is None:
+                return
+        else:
+            if len(result) == 0:
+                return
+            result.sort("dstArcSec")
+            gaia_mask = result["GAIA"] == str(self._gaia_id)
+            matched = result[gaia_mask]
+            if len(matched) == 0:
+                return
+            row = matched[0]
 
-        result.sort("dstArcSec")
-        gaia_mask = result["GAIA"] == str(self._gaia_id)
-        matched = result[gaia_mask]
-        if len(matched) == 0:
-            return
-
-        row = matched[0]
         if _col(row, "objType") != "STAR":
             return
 
