@@ -718,6 +718,10 @@ class Librarian:
                     Vizier.query_region,
                     self._coord, radius=self._search_radius, catalog=viz_cat,
                 )
+                if result is None:
+                    self._ids[cat_name] = None
+                    self._query_failed(f"{cat_name} ID")
+                    continue
                 if not result or len(result[0]) == 0:
                     self._ids[cat_name] = None
                     continue
@@ -731,6 +735,8 @@ class Librarian:
                 continue
 
             if cat_name not in _XMATCH_CONFIG:
+                # Gaia TAP failed and this catalogue has no other ID route.
+                self._query_failed(f"{cat_name} ID")
                 continue
 
             vizier_cat, id_cols = _XMATCH_CONFIG[cat_name]
@@ -743,7 +749,13 @@ class Librarian:
                 area=region,
             )
             try:
-                if xm is None or len(xm) == 0:
+                if xm is None:
+                    # The Gaia TAP lookup already failed; without this ID the
+                    # catalogue's photometry is never fetched.
+                    self._ids[cat_name] = None
+                    self._query_failed(f"{cat_name} ID")
+                    continue
+                if len(xm) == 0:
                     self._ids[cat_name] = None
                     continue
 
@@ -791,6 +803,7 @@ class Librarian:
             except Exception as e:
                 logger.warning("XMatch fallback failed for %s: %s", cat_name, e)
                 self._ids[cat_name] = None
+                self._query_failed(f"{cat_name} ID")
 
     # ── Bailer-Jones distance ────────────────────────────────────
 
