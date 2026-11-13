@@ -1,8 +1,13 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.12] - 2026-11-13
 
 ### Fixed
+- **TIC from VizieR when MAST fails.** MAST's catalogue service stalled on
+  2026-11-13 (one TIC query took 401 s, the next failed after 90 s), so every
+  star lost its TESS band. TIC-8 is now read from VizieR (IV/39/tic82,
+  through the mirror failover) when MAST fails, matched on the Gaia ID; the
+  row without a DUPLICATE/SPLIT disposition wins.
 - **Malformed VOTables from the mirror are retried.** The CfA mirror
   intermittently serves VOTables that are not well-formed XML; they are now
   retried like a database error and never cached. The CDS failover module
