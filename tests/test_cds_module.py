@@ -30,6 +30,9 @@ CFA = "vizier.cfa.harvard.edu"
 
 
 DB_ERROR = "DB"  # plan value: a 200 carrying VizieR's database-down INFO
+MALFORMED = "BAD"  # plan value: a 200 whose VOTable is not well-formed XML
+BAD_VOTABLE = ('<?xml version="1.0"?><VOTABLE version="1.4"><RESOURCE><TABLE>'
+               '<DATA><TABLEDATA><TR><TD>1\x00</TD></TR>')
 
 
 class _Resp:
@@ -57,6 +60,8 @@ def http(monkeypatch):
                 outcome = outcome.pop(0)
             if isinstance(outcome, Exception):
                 raise outcome
+            if outcome == MALFORMED:
+                return _Resp(200, host, BAD_VOTABLE)
             if outcome == DB_ERROR:
                 return _Resp(200, host, '<INFO ID="Error" name="Error" '
                              'value="The database is not currently reachable."/>')
@@ -545,3 +550,91 @@ def test_primary_empty_answer_is_trusted_and_cached(monkeypatch):
     calls, forgotten = _fake_seq(monkeypatch, [EMPTY_VOT])
     resp = _get(_viz())
     assert resp.host == CDS and calls == [CDS] and forgotten == []
+
+
+# ── malformed VOTables and blank rows (synced from astroARIADNE v2) ──
+
+
+def test_malformed_votable_is_detected():
+    assert _cds._malformed(_Resp(200, CFA, BAD_VOTABLE))
+    assert not _cds._malformed(_Resp(200, CFA, "<VOTABLE><RESOURCE/></VOTABLE>"))
+    assert not _cds._malformed(_Resp(200, CFA, "not xml at all"))   # e.g. TSV
+    assert not _cds._malformed(_Resp(200, CFA, ""))
+
+
+def test_malformed_votable_is_retried_on_the_mirror(http):
+    http.plan = {CDS: 404, CFA: [MALFORMED, MALFORMED, 200]}
+    resp = _get(_viz())
+    assert resp.host == CFA and resp.text == ""
+    assert [h for h, _ in http.calls] == [CDS, CFA, CFA, CFA]
+
+
+def test_malformed_votable_on_every_try_raises(http):
+    http.plan = {CDS: 404, CFA: MALFORMED}
+    with pytest.raises(requests.HTTPError, match="malformed"):
+        _get(_viz())
+    assert len(http.calls) == 1 + _cds.MIRROR_TRIES
+
+
+def test_cached_malformed_response_is_deleted(http, tmp_path):
+    v = _viz()
+    v.cache_location = str(tmp_path)
+    forgotten = []
+    v._forget = lambda method, url, kw: forgotten.append(url)
+    http.plan = {CDS: MALFORMED}          # the primary gets one try
+    assert _get(v).host == CFA
+    assert forgotten == [f"https://{CDS}/viz-bin/votable"]
+
+
+def _tablelist(**tables):
+    from astroquery.utils import commons
+    return commons.TableList(tables)
+
+
+def test_blank_mirror_row_is_dropped():
+    t = Table(masked=True)
+    t["Source"] = MaskedColumn([0, 4888833115509354496], mask=[True, False])
+    t["pmRA"] = MaskedColumn([0.0, 28.72], mask=[True, False])
+    t["Plx"] = MaskedColumn([0.0, np.nan], mask=[True, True])   # a real NULL
+    t["2MASS"] = ["", ""]
+    out = _cds._drop_blank_rows(_tablelist(**{"I/355/gaiadr3": t}))
+    g = out["I/355/gaiadr3"]
+    assert len(g) == 1 and g["Source"][0] == 4888833115509354496
+    assert np.ma.is_masked(g["Plx"][0])                     # NULLs survive
+
+
+def test_tables_without_blank_rows_or_numbers_are_untouched():
+    real = Table({"RAJ2000": [1.0, 2.0], "Name": ["a", "b"]})
+    text = Table({"Name": ["", ""]})
+    out = _cds._drop_blank_rows(_tablelist(a=real, b=text))
+    assert len(out["a"]) == 2 and len(out["b"]) == 2
+    assert _cds._drop_blank_rows("unparsed raw text") == "unparsed raw text"
+
+
+def test_blank_row_with_int_zero_is_dropped():
+    # I/352 junk row: VOTable ints without a null value read an empty cell as 0.
+    t = Table(masked=True)
+    t["Source"] = MaskedColumn([0, 6668917117751909632], mask=[False, False])
+    t["RA_ICRS"] = MaskedColumn([0.0, 304.118], mask=[True, False])
+    t["rgeo"] = MaskedColumn([0.0, 147.54], mask=[True, False])
+    t["Flag"] = MaskedColumn([0, 10033], mask=[True, False])
+    out = _cds._drop_blank_rows(_tablelist(**{"I/352/gedr3dis": t}))
+    g = out["I/352/gedr3dis"]
+    assert len(g) == 1 and g["rgeo"][0] == 147.54
+
+
+def test_a_real_row_with_a_zero_id_but_finite_floats_is_kept():
+    t = Table({"Seq": [0, 1], "RAJ2000": [10.0, 11.0], "Vmag": [np.nan, 9.1]})
+    out = _cds._drop_blank_rows(_tablelist(a=t))
+    assert len(out["a"]) == 2
+
+
+def test_blank_row_with_a_float_zero_coordinate_is_dropped():
+    # II/246/out junk row (2026-11-13): RAJ2000 = 0.0, everything else masked.
+    t = Table(masked=True)
+    t["RAJ2000"] = MaskedColumn([0.0, 205.729261], mask=[False, False])
+    t["DEJ2000"] = MaskedColumn([0.0, -41.401066], mask=[True, False])
+    t["Kmag"] = MaskedColumn([0.0, 3.1], mask=[True, False])
+    t["Opt"] = ["Opt", "Opt"]
+    out = _cds._drop_blank_rows(_tablelist(**{"II/246/out": t}))
+    assert list(out["II/246/out"]["Kmag"]) == [3.1]

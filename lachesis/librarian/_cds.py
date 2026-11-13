@@ -105,10 +105,9 @@ def _order(primary, mirrors):
 # read as "not in the catalogue". Observed on the CfA mirror (2026-11-11), up
 # to 4 of 6 identical queries failing this way. Under load (2026-11-13) it
 # also answers "ERROR : temporary unavailable" / "(pipe) Request has been
-# interrupted"; 184 of those were cached in one batch and replayed as empty,
-# silently dropping 2MASS, WISE, Johnson and Stromgren. Permanent errors
-# ("Table ... does not exist") are deliberately not markers: retrying them is
-# useless and would trip the breaker on a healthy host.
+# interrupted"; 184 of those were cached in one batch and replayed as empty.
+# Permanent errors ("Table ... does not exist") are deliberately not markers:
+# retrying them is useless and would trip the breaker on a healthy host.
 _DB_ERROR_MARKERS = ("not currently reachable", "STDB_ERR", "connect error",
                      "temporary unavailable", "Request has been interrupted")
 MIRROR_TRIES = int(os.environ.get("CDS_MIRROR_TRIES", "5"))
@@ -127,12 +126,79 @@ def _empty_votable(resp):
 
     From the CfA mirror such an answer is not proof of absence: on 2026-11-13
     it answered a 3" cone on II/246/out around HIP 66924 with no table (no
-    error, same warnings as a real empty) and the same query a few minutes
+    error, the same warnings as a real empty) and the same query minutes
     later with the 2MASS row, three times out of three. astroquery cached the
     false empty, so every rerun of the star lost 2MASS.
     """
     text = getattr(resp, "text", "")
     return isinstance(text, str) and "<VOTABLE" in text and "<TR>" not in text
+
+
+def _malformed(resp):
+    """True for a 200 VOTable body that is not well-formed XML.
+
+    The CfA mirror intermittently serves corrupted VOTables (2026-11-13:
+    "not well-formed (invalid token)" at a random line). astroquery fails to
+    parse them, the query reads as failed, and the bad body stays in
+    astroquery's request cache, replayed on every rerun.
+    """
+    content = getattr(resp, "content", None)
+    if not isinstance(content, (bytes, bytearray)):
+        text = getattr(resp, "text", "")
+        content = text.encode("utf-8", "replace") if isinstance(text, str) else b""
+    if b"<VOTABLE" not in content[:4096]:
+        return False
+    import xml.etree.ElementTree as ET
+    try:
+        ET.fromstring(content)
+    except ET.ParseError:
+        return True
+    return False
+
+
+def _empty_cells(col):
+    """Per row: True where every element of the cell is masked, NaN or 0.
+
+    Ints: a VOTable int without a null value reads an empty cell as 0.
+    Floats: the II/246/out junk row (2026-11-13) carried RAJ2000 = 0.0 with
+    every other number masked, so 0.0 counts as empty too. A real row always
+    has some finite non-zero number (a coordinate at least).
+    """
+    data = np.ma.getdata(col)
+    empty = np.ma.getmaskarray(col).copy()
+    if data.dtype.kind in "fc":
+        empty |= ~np.isfinite(data)
+    empty |= data == 0
+    return empty.reshape(len(col), -1).all(axis=1)
+
+
+def _drop_blank_rows(result):
+    """Remove rows with no value in any numeric column from a parsed answer.
+
+    The CfA mirror (2026-11-13) intermittently returned VOTables with an extra
+    first row: every float cell masked, int cells 0 (no null value declared),
+    strings empty or a URL fragment (``https://vizier.idia.ac.za/...``).
+    astroquery caches those answers, so they replay for a week. A single-row
+    lookup read the junk row as THE answer: Gaia DR3 by Source lost PM,
+    parallax and G; I/352 lost the Bailer-Jones distance; the ESA fallbacks
+    never ran because a row was present. A real catalogue row always carries a
+    finite float (coordinates at least), so tables without float columns are
+    left alone.
+    """
+    if isinstance(result, (str, bytes)) or not hasattr(result, "keys"):
+        return result
+    for key in list(result.keys()):
+        t = result[key]
+        if not len(t) or not any(t[c].dtype.kind in "fc" for c in t.colnames):
+            continue
+        blank = np.ones(len(t), bool)
+        for c in t.colnames:
+            if t[c].dtype.kind in "iufc":
+                blank &= _empty_cells(t[c])
+        if blank.any():
+            logger.info("VizieR %s: dropped %d blank row(s)", key, int(blank.sum()))
+            t.remove_rows(np.nonzero(blank)[0])
+    return result
 
 
 def _all_columns(data):
@@ -153,29 +219,6 @@ def _all_columns(data):
     return "\n".join(kept[:1] + ["-out.all"] + kept[1:])
 
 
-def _junk_rows(tbl):
-    """Mask of rows with no finite, non-zero value in any numeric column.
-
-    The CfA mirror puts such a row first in some answers (2026-11-13: Source=0
-    and every other cell masked on I/352/gedr3dis; RAJ2000=0 and the rest
-    masked on II/246/out), so code reading row 0 got a masked distance or lost
-    the 2MASS bands. A real VizieR row always has a position, an ID or a
-    measurement. A table without numeric columns is left alone.
-    """
-    keep = np.zeros(len(tbl), dtype=bool)
-    numeric = False
-    for name in tbl.colnames:
-        col = tbl[name]
-        if getattr(col, "dtype", None) is None or col.dtype.kind not in "iuf":
-            continue
-        numeric = True
-        vals = np.ma.asarray(col, dtype=float).filled(0.0)
-        keep |= np.isfinite(vals) & (vals != 0)
-    if not numeric:
-        return np.zeros(len(tbl), dtype=bool)
-    return ~keep
-
-
 class MirroredVizier(VizierClass):
     """astroquery Vizier that moves to a mirror when a host is down.
 
@@ -185,9 +228,9 @@ class MirroredVizier(VizierClass):
     sent as an empty 200 is not, and is retried. Requests to a mirror always
     ask for ``-out.all`` (see ``_all_columns``). If every host fails the query
     raises, so callers take their own fallback instead of reading "no data".
-    Rows that carry no data are dropped from every result (see ``_junk_rows``).
-    An empty answer from a mirror is never cached and is asked once more
-    (see ``_empty_votable``).
+    Blank rows are dropped from every result (see ``_drop_blank_rows``). An
+    empty answer from a mirror is never cached and is asked once more (see
+    ``_empty_votable``).
     """
 
     mirrors = VIZIER_MIRRORS
@@ -199,15 +242,7 @@ class MirroredVizier(VizierClass):
         self.name = "Vizier"
 
     def _parse_result(self, response, **kwargs):
-        result = super()._parse_result(response, **kwargs)
-        if isinstance(result, list):  # a TableList; anything else passes through
-            for tbl in result:
-                junk = _junk_rows(tbl)
-                if junk.any():
-                    logger.info("Dropped %d empty row(s) from VizieR %s",
-                                int(junk.sum()), tbl.meta.get("name", "table"))
-                    tbl.remove_rows(np.flatnonzero(junk))
-        return result
+        return _drop_blank_rows(super()._parse_result(response, **kwargs))
 
     def _request(self, method, url, *args, **kwargs):
         parts = urlsplit(url)
@@ -237,7 +272,7 @@ class MirroredVizier(VizierClass):
                     self._forget(method, target, send)
                     last_resp = resp
                     break
-                if _db_error(resp):
+                if _db_error(resp) or _malformed(resp):
                     self._forget(method, target, send)
                     db_failed = resp
                     if attempt + 1 < tries:
@@ -260,7 +295,8 @@ class MirroredVizier(VizierClass):
                 breaker.trip(host, "database not reachable")
         if db_failed is not None:
             raise requests.HTTPError(
-                "VizieR database not reachable on any host", response=db_failed)
+                "VizieR database not reachable (or its answer malformed) on any "
+                "host", response=db_failed)
         if last_resp is not None:
             return last_resp
         raise last_exc
