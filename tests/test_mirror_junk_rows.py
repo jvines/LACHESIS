@@ -32,27 +32,32 @@ def _bj_table(junk_first=True):
     return t
 
 
-# ── _junk_rows ───────────────────────────────────────────────────────
+# ── blank rows ───────────────────────────────────────────────────────
 
 
-def test_junk_rows_flags_the_mirror_bailer_jones_row():
-    assert list(_cds._junk_rows(_bj_table())) == [True, False]
+def _drop(t):
+    from astroquery.utils import commons
+    return _cds._drop_blank_rows(commons.TableList({"t": t}))["t"]
 
 
-def test_junk_rows_flags_the_mirror_2mass_row():
+def test_blank_row_dropped_from_the_mirror_bailer_jones_answer():
+    assert list(_drop(_bj_table())["Source"]) == [6112358006954796416]
+
+
+def test_blank_row_dropped_from_the_mirror_2mass_answer():
     # The 2MASS junk row has RAJ2000 = 0 (not masked) and a filled link column.
     t = Table()
     t["RAJ2000"] = [0.0, 205.729261]
     t["DEJ2000"] = MaskedColumn([0.0, -41.401066], mask=[True, False])
     t["Kmag"] = MaskedColumn([0.0, 3.1], mask=[True, False])
     t["Opt"] = ["Opt", "Opt"]
-    assert list(_cds._junk_rows(t)) == [True, False]
+    assert list(_drop(t)["Kmag"]) == [3.1]
 
 
-def test_junk_rows_keeps_real_rows_and_text_only_tables():
-    assert not _cds._junk_rows(_bj_table(junk_first=False)).any()
-    assert not _cds._junk_rows(Table({"name": ["a", "b"]})).any()
-    assert not _cds._junk_rows(Table({"x": np.array([], dtype=float)})).any()
+def test_real_rows_and_text_only_tables_are_kept():
+    assert len(_drop(_bj_table(junk_first=False))) == 1
+    assert len(_drop(Table({"name": ["a", "b"]}))) == 2
+    assert len(_drop(Table({"x": np.array([], dtype=float)}))) == 0
 
 
 def test_parse_result_drops_junk_rows():
